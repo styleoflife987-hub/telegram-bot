@@ -1,1 +1,8 @@
 python-telegram-bot==20.7
+aiogram==3.4.1
+boto3
+pandas
+openpyxl
+nest_asyncio
+pytz
+openai
