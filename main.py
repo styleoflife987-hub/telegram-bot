@@ -1,7 +1,6 @@
 import asyncio
 import nest_asyncio
 import pandas as pd
-import boto3
 import re
 from io import BytesIO
 from datetime import datetime
@@ -15,6 +14,8 @@ import json
 import pytz
 import uuid
 from openai import OpenAI
+from pymongo import MongoClient
+from bson import ObjectId
 
 
 
@@ -40,10 +41,15 @@ def is_valid_deal_state(deal: dict) -> bool:
 # ---------------- CONFIG ----------------
 
 TOKEN = os.getenv("BOT_TOKEN")
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
-AWS_BUCKET = os.getenv("AWS_BUCKET")
-AWS_REGION = os.getenv("AWS_REGION")
+MONGO_URI = os.getenv("MONGO_URI")
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["diamondbot"]
+accounts_col = db["accounts"]
+stock_col = db["stock"]
+deals_col = db["deals"]
+activity_col = db["activity_logs"]
+notifications_col = db["notifications"]
+sessions_col = db["sessions"]
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ---------------- OPENAI ----------------
@@ -53,10 +59,8 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 ACCOUNTS_KEY = "users/accounts.xlsx"
 STOCK_KEY = "stock/diamonds.xlsx"
 
-SUPPLIER_STOCK_FOLDER = "stock/suppliers/"
 COMBINED_STOCK_KEY = "stock/combined/all_suppliers_stock.xlsx"
-ACTIVITY_LOG_FOLDER = "activity_logs/"
-DEALS_FOLDER = "deals/"
+
 DEAL_HISTORY_KEY = "deals/deal_history.xlsx"
 NOTIFICATIONS_FOLDER = "notifications/"
 
@@ -81,14 +85,30 @@ threading.Thread(target=run_web).start()
 
 dp = Dispatcher()
 
-# ---------------- AWS ----------------
+# ---------------- MONGODB ----------------
 
-s3 = boto3.client(
-    "s3",
-    aws_access_key_id=AWS_ACCESS_KEY,
-    aws_secret_access_key=AWS_SECRET_KEY,
-    region_name=AWS_REGION
-)
+def save_notification(username, role, message):
+    notifications_col.insert_one({
+        "username": username,
+        "role": role,
+        "message": message,
+        "time": datetime.now(pytz.timezone("Asia/Kolkata")),
+        "read": False
+    })
+
+def fetch_unread_notifications(username, role):
+    notes = list(notifications_col.find({
+        "username": username,
+        "role": role,
+        "read": False
+    }))
+
+    notifications_col.update_many(
+        {"username": username, "role": role},
+        {"$set": {"read": True}}
+    )
+
+    return notes
 
 # ---------------- KEYBOARDS ----------------
 admin_kb = ReplyKeyboardMarkup(
@@ -193,12 +213,8 @@ def log_activity(user, action, details=None):
 
     data.append(log_entry)
 
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType="application/json"
-    )
+    # 💾 SAVE DEAL AFTER LOCK (MongoDB)
+    deals_col.insert_one(deal)
 
 
 def save_notification(username, role, message):
@@ -275,15 +291,13 @@ def ask_openai(system_prompt, user_prompt, temperature=0.2, telegram_id=None):
 
 
 def load_accounts():
-    try:
-        s3.download_file(AWS_BUCKET, ACCOUNTS_KEY, "/tmp/accounts.xlsx")
-        return pd.read_excel("/tmp/accounts.xlsx", dtype=str)
-    except:
-        return pd.DataFrame(columns=["USERNAME","PASSWORD","ROLE","APPROVED"])
+    data = list(accounts_col.find({}, {"_id": 0}))
+    return pd.DataFrame(data)
 
 def save_accounts(df):
-    df.to_excel("/tmp/accounts.xlsx", index=False)
-    s3.upload_file("/tmp/accounts.xlsx", AWS_BUCKET, ACCOUNTS_KEY)
+    accounts_col.delete_many({})
+    if not df.empty:
+        accounts_col.insert_many(df.to_dict("records"))
 
 
 SESSION_KEY = "sessions/logged_in_users.json"
@@ -361,30 +375,14 @@ def load_stock():
         return pd.DataFrame()
 
 def lock_stone(stone_id):
-    df = load_stock()
-    if df.empty:
+    if locks_col.find_one({"stone_id": stone_id}):
         return False
-
-    if stone_id not in df["Stock #"].values:
-        return False
-
-    if df.loc[df["Stock #"] == stone_id, "LOCKED"].values[0] == "YES":
-        return False
-
-    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "YES"
-    df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
-    s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
+    locks_col.insert_one({"stone_id": stone_id, "locked_at": datetime.utcnow()})
     return True
 
 
 def unlock_stone(stone_id):
-    df = load_stock()
-    if df.empty:
-        return
-
-    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
-    df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
-    s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
+    locks_col.delete_one({"stone_id": stone_id})
 
 
 def remove_stone_from_supplier_and_combined(stone_id):
@@ -423,21 +421,18 @@ def remove_stone_from_supplier_and_combined(stone_id):
 # ---------------- STATE ----------------
 
 def save_sessions():
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=SESSION_KEY,
-        Body=json.dumps(logged_in_users, default=str),
-        ContentType="application/json"
-    )
+    sessions_col.delete_many({})
+    for uid, data in logged_in_users.items():
+        sessions_col.insert_one({
+            "uid": uid,
+            "data": data
+        })
 
 def load_sessions():
     global logged_in_users
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=SESSION_KEY)
-        raw = json.loads(obj["Body"].read())
-        logged_in_users = {int(k): v for k, v in raw.items()}
-    except:
-        logged_in_users = {}
+    logged_in_users = {}
+    for row in sessions_col.find():
+        logged_in_users[int(row["uid"])] = row["data"]
 
 # ---------------- START ----------------
 
@@ -670,9 +665,7 @@ async def admin_approve_deal(callback: types.CallbackQuery):
     deal_id = callback.data.split(":")[1]
     key = f"{DEALS_FOLDER}{deal_id}.json"
 
-    deal = json.loads(
-        s3.get_object(Bucket=AWS_BUCKET, Key=key)["Body"].read()
-    )
+    deal = deals_col.find_one({"deal_id": deal_id})
 
     if deal["supplier_action"] != "ACCEPTED" or deal["admin_action"] != "PENDING":
         await callback.answer("⚠️ Invalid deal state", show_alert=True)
@@ -685,11 +678,10 @@ async def admin_approve_deal(callback: types.CallbackQuery):
     remove_stone_from_supplier_and_combined(deal["stone_id"])
     log_deal_history(deal)
 
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(deal, indent=2),
-        ContentType="application/json"
+    deals_col.update_one(
+        {"deal_id": deal_id},
+        {"$set": deal},
+        upsert=True
     )
 
     # 🔔 Notifications
@@ -1103,12 +1095,17 @@ async def supplier_view_deals(message: types.Message):
 
     supplier_username = user["USERNAME"].lower()
 
-    response = s3.list_objects_v2(
-        Bucket=AWS_BUCKET,
-        Prefix=DEALS_FOLDER
-    )
-
     rows = []
+
+    for deal in deals_col.find({"supplier_username": supplier_username}):
+        rows.append({
+            "Deal ID": deal["deal_id"],
+            "Stone ID": deal["stone_id"],
+            "Client": deal["client_username"],
+            "Actual Price ($/ct)": deal["actual_stock_price"],
+            "Offer Price ($/ct)": deal["client_offer_price"],
+            "Supplier Action (ACCEPT / REJECT)": deal["supplier_action"]
+        })
 
     for obj in response.get("Contents", []):
         if not obj["Key"].endswith(".json"):
@@ -1274,20 +1271,7 @@ async def user_activity_report(message: types.Message):
     log_activity(user, "DOWNLOAD_ACTIVITY_REPORT")
 
 def generate_activity_excel():
-    objs = s3.list_objects_v2(Bucket=AWS_BUCKET, Prefix=ACTIVITY_LOG_FOLDER)
-    rows = []
-
-    for obj in objs.get("Contents", []):
-        if not obj["Key"].endswith(".json"):
-            continue
-
-        data = json.loads(
-            s3.get_object(Bucket=AWS_BUCKET, Key=obj["Key"])["Body"].read()
-        )
-
-        for r in data:
-            rows.append(r)
-
+    rows = list(activity_col.find({}, {"_id": 0}))
     if not rows:
         return None
 
