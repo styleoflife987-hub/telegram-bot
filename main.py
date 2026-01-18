@@ -1412,21 +1412,25 @@ async def handle_text(message: types.Message):
         if state["step"] == "login_password":
             df = load_accounts()
 
-             # ✅ Normalize inputs
+            # ✅ Normalize inputs
             input_username = str(state["username"]).strip().lower()
             input_password = str(message.text).strip()
-            
-            # ✅ Force everything to string
+
+            # ✅ Normalize Excel data safely
             df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
             df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
+            df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
+            df["ROLE"] = df["ROLE"].astype(str).str.strip().str.lower()
 
-            # ✅ Debug safety (optional)
+            # 🧪 DEBUG (keep for now)
             print("LOGIN TRY:", input_username, input_password)
-            print(df[["USERNAME","PASSWORD"]].head())
+            print("EXCEL SAMPLE:")
+            print(df[["USERNAME", "PASSWORD", "APPROVED", "ROLE"]].head())
 
+            # ✅ Match user
             r = df[
-            (df["USERNAME"] == input_username) &
-            (df["PASSWORD"] == input_password)
+                (df["USERNAME"] == input_username) &
+                (df["PASSWORD"] == input_password)
             ]
 
             if r.empty:
@@ -1436,18 +1440,16 @@ async def handle_text(message: types.Message):
 
             if r.iloc[0]["APPROVED"] != "YES":
                 await message.reply("❌ Your account is not approved yet.")
-                user_state.pop(uid)
+                user_state.pop(uid, None)
                 return
 
             # ---------------- FIX FOR PRINCE ----------------
             role = r.iloc[0]["ROLE"]
             if r.iloc[0]["USERNAME"].lower() == "prince":
-                role = "admin"  # Force Prince to be admin
+                role = "admin"
             # -----------------------------------------------
 
-            # Save logged in Telegram ID
-            ist = pytz.timezone("Asia/Kolkata")
-
+            # ✅ Save logged user
             logged_in_users[uid] = {
                 "USERNAME": r.iloc[0]["USERNAME"],
                 "ROLE": role,
@@ -1455,13 +1457,9 @@ async def handle_text(message: types.Message):
             }
 
             save_sessions()
+            log_activity(logged_in_users[uid], "LOGIN")
 
-            log_activity(
-                logged_in_users[uid],
-                "LOGIN"
-            )
-
-            # Assign keyboard
+            # ✅ Assign keyboard
             if role == "admin":
                 kb = admin_kb
             elif role == "client":
@@ -1474,27 +1472,15 @@ async def handle_text(message: types.Message):
             username = r.iloc[0]["USERNAME"].capitalize()
 
             if role == "admin":
-                welcome_msg = (
-                    f"👑 Welcome back, Admin {username} — command, control, excellence."
-                )
-
+                welcome_msg = f"👑 Welcome back, Admin {username}"
             elif role == "supplier":
-                welcome_msg = (
-                    f"💎 Welcome, Supplier {username} — your brilliance drives the market."
-                )
-
+                welcome_msg = f"💎 Welcome, Supplier {username}"
             elif role == "client":
-                welcome_msg = (
-                    f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
-                )
-
+                welcome_msg = f"🥂 Welcome, {username}"
             else:
-                welcome_msg = f"Welcome, {username}."
+                welcome_msg = f"Welcome, {username}"
 
-            await message.reply(
-                welcome_msg,
-                reply_markup=kb
-            )
+            await message.reply(welcome_msg, reply_markup=kb)
 
             # 🔔 SHOW SAVED NOTIFICATIONS
             notifications = fetch_unread_notifications(
@@ -1509,9 +1495,7 @@ async def handle_text(message: types.Message):
                 await message.reply(note_msg)
 
             user_state.pop(uid, None)
-
-
-
+            return
 
     # -------- BUTTON HANDLING --------
     user = get_logged_user(uid)
