@@ -6,3 +6,6 @@ openpyxl
 nest_asyncio
 pytz
 openai
+pymongo
+dnspython
+python-dotenv
