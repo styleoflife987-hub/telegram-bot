@@ -63,7 +63,7 @@ NOTIFICATIONS_FOLDER = "notifications/"
 
 # ---------------- BOT INIT ----------------
 
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ---------------- AWS ----------------
