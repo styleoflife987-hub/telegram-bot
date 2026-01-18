@@ -1,6 +1,27 @@
 import asyncio
 import nest_asyncio
 import pandas as pd
+
+from pymongo import MongoClient
+import os
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+
+mongo_client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=5000
+)
+
+db = mongo_client["flowai"]
+
+users_col = db["users"]
+stock_col = db["stock"]
+deals_col = db["deals"]
+activity_col = db["activity"]
+notifications_col = db["notifications"]
+locks_col = db["locks"]
+
 import re
 from io import BytesIO
 from datetime import datetime
@@ -31,6 +52,7 @@ notifications_col = db["notifications"]
 
 import pytz
 import uuid
+from passlib.hash import bcrypt
 from openai import OpenAI
 from pymongo import MongoClient
 from bson import ObjectId
@@ -304,14 +326,18 @@ def is_admin(user):
     return user is not None and user.get("ROLE") == "admin"
 
 def lock_stone(stone_id):
-    if locks_col.find_one({"stone_id": stone_id}):
-        return False
-    locks_col.insert_one({"stone_id": stone_id, "locked_at": datetime.utcnow()})
-    return True
+    return locks_col.find_one_and_update(
+        {"stone_id": stone_id, "locked": False},
+        {"$set": {"locked": True, "time": datetime.utcnow()}},
+        upsert=True
+    ) is not None
 
 
 def unlock_stone(stone_id):
-    locks_col.delete_one({"stone_id": stone_id})
+    locks_col.update_one(
+        {"stone_id": stone_id},
+        {"$set": {"locked": False}}
+    )
 
 
 # ---------------- STATE ----------------
@@ -1291,13 +1317,20 @@ async def handle_text(message: types.Message):
                 .str.lower()
             )
 
-            print("LOGIN TRY:", input_username, input_password)
-            print(df[["USERNAME", "PASSWORD", "APPROVED", "ROLE"]].head())
+            r = df[df["USERNAME"] == input_username]
 
-            r = df[
-                (df["USERNAME"] == input_username) &
-                (df["PASSWORD"] == input_password)
-            ]
+            if r.empty:
+                await message.reply("❌ Login failed.")
+                user_state.pop(uid, None)
+                return
+
+            stored_hash = str(r.iloc[0]["PASSWORD"])
+
+            if not bcrypt.verify(input_password, stored_hash):
+                await message.reply("❌ Login failed.")
+                user_state.pop(uid, None)
+                return
+
 
             if r.empty:
                 await message.reply("❌ Login failed. Invalid username or password.")
