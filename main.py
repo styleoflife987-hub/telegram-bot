@@ -62,6 +62,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["diamondbot"]
+deals_col = db["deals"]
+stock_col = db["stock_files"]
 accounts_col = db["accounts"]
 stock_col = db["stock"]
 deals_col = db["deals"]
@@ -168,42 +170,49 @@ supplier_kb = ReplyKeyboardMarkup(
 
 # ---------------- HELPERS ----------------
 
-# ---------------- HELPERS ----------------
+# ---------------- DEAL HISTORY (MongoDB) ----------------
 
 def log_deal_history(deal):
-    try:
-        s3.download_file(AWS_BUCKET, DEAL_HISTORY_KEY, "/tmp/deal_history.xlsx")
-        df = pd.read_excel("/tmp/deal_history.xlsx")
-    except Exception:
-        df = pd.DataFrame(columns=[
-            "deal_id",
-            "stone_id",
-            "supplier",
-            "client",
-            "actual_price",
-            "offer_price",
-            "supplier_action",
-            "admin_action",
-            "final_status",
-            "created_at"
-        ])
+    if not deal:
+        return
 
-    df.loc[len(df)] = [
-        deal.get("deal_id"),
-        deal.get("stone_id"),
-        deal.get("supplier_username"),
-        deal.get("client_username"),
-        deal.get("actual_stock_price"),
-        deal.get("client_offer_price"),
-        deal.get("supplier_action"),
-        deal.get("admin_action"),
-        deal.get("final_status"),
-        deal.get("created_at"),
-    ]
+    history = {
+        "deal_id": deal.get("deal_id"),
+        "stone_id": deal.get("stone_id"),
+        "supplier": deal.get("supplier_username"),
+        "client": deal.get("client_username"),
+        "actual_price": deal.get("actual_stock_price"),
+        "offer_price": deal.get("client_offer_price"),
+        "supplier_action": deal.get("supplier_action"),
+        "admin_action": deal.get("admin_action"),
+        "final_status": deal.get("final_status"),
+        "created_at": deal.get("created_at"),
+        "logged_at": datetime.utcnow()
+    }
 
-    df.to_excel("/tmp/deal_history.xlsx", index=False)
-    s3.upload_file("/tmp/deal_history.xlsx", AWS_BUCKET, DEAL_HISTORY_KEY)
+    db["deal_history"].insert_one(history)
 
+# ---------------- ACTIVITY LOG (MongoDB) ----------------
+
+def log_activity(user, action, details=None):
+    if not user:
+        return
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+
+    activity_col.insert_one({
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "login_id": user.get("USERNAME"),
+        "role": user.get("ROLE"),
+        "action": action,
+        "details": details or {},
+        "created_at": now
+    })
+
+
+# ---------------- HELPERS ----------------
 
 def log_activity(user, action, details=None):
     if not user:
@@ -220,11 +229,6 @@ def log_activity(user, action, details=None):
         "action": action,
         "details": details or {}
     }
-
-    key = f"{ACTIVITY_LOG_FOLDER}{log_entry['date']}/{log_entry['login_id']}.json"
-
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=key)
         data = json.loads(obj["Body"].read())
     except Exception:
         data = []
@@ -233,54 +237,6 @@ def log_activity(user, action, details=None):
 
     # 💾 SAVE DEAL AFTER LOCK (MongoDB)
     deals_col.insert_one(deal)
-
-
-def save_notification(username, role, message):
-    key = f"{NOTIFICATIONS_FOLDER}{role}_{username}.json"
-
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=key)
-        data = json.loads(obj["Body"].read())
-    except Exception:
-        data = []
-
-    data.append({
-        "message": message,
-        "time": datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M"),
-        "read": False
-    })
-
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType="application/json"
-    )
-
-
-def fetch_unread_notifications(username, role):
-    key = f"{NOTIFICATIONS_FOLDER}{role}_{username}.json"
-
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=key)
-        data = json.loads(obj["Body"].read())
-    except Exception:
-        return []
-
-    unread = [n for n in data if not n.get("read")]
-
-    # Mark all as read
-    for n in data:
-        n["read"] = True
-
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType="application/json"
-    )
-
-    return unread
 
 # ---------------- OPENAI HELPER ----------------
 
@@ -312,6 +268,20 @@ def load_accounts():
     data = list(accounts_col.find({}, {"_id": 0}))
     return pd.DataFrame(data)
 
+def load_stock():
+    records = list(stock_col.find({}, {"_id": 0}))
+    if not records:
+        return pd.DataFrame()
+    
+    rows = []
+    for doc in records:
+        supplier = doc.get("supplier")
+        for r in doc.get("rows", []):
+            r["SUPPLIER"] = supplier
+            rows.append(r)
+
+    return pd.DataFrame(rows)
+
 def save_accounts(df):
     accounts_col.delete_many({})
     if not df.empty:
@@ -333,65 +303,6 @@ def get_logged_user(uid):
 def is_admin(user):
     return user is not None and user.get("ROLE") == "admin"
 
-def rebuild_combined_stock():
-    objs = s3.list_objects_v2(Bucket=AWS_BUCKET, Prefix=SUPPLIER_STOCK_FOLDER)
-    if "Contents" not in objs:
-        return
-
-    dfs = []
-    for obj in objs.get("Contents", []):
-        key = obj["Key"]
-        if not key.endswith(".xlsx"):
-            continue
-        local_path = f"/tmp/{key.split('/')[-1]}"
-        s3.download_file(AWS_BUCKET, key, local_path)
-        df = pd.read_excel(local_path)
-        df["SUPPLIER"] = key.split("/")[-1].replace(".xlsx","").lower()
-        dfs.append(df)
-
-    if not dfs:
-        return
-
-    final_df = pd.concat(dfs, ignore_index=True)
-
-    # Required columns
-    desired_columns = [
-        "Stock #","Availability","Shape","Weight","Color","Clarity","Cut","Polish","Symmetry",
-        "Fluorescence Color","Measurements","Shade","Milky","Eye Clean","Lab","Report #","Location",
-        "Treatment","Discount","Price Per Carat","Final Price","Depth %","Table %","Girdle Thin",
-        "Girdle Thick","Girdle %","Girdle Condition","Culet Size","Culet Condition","Crown Height",
-        "Crown Angle","Pavilion Depth","Pavilion Angle","Inscription","Cert comment","KeyToSymbols",
-        "White Inclusion","Black Inclusion","Open Inclusion","Fancy Color","Fancy Color Intensity",
-        "Fancy Color Overtone","Country","State","City","CertFile","Diamond Video","Diamond Image",
-        "SUPPLIER","LOCKED","Diamond Type"
-    ]
-
-    if "LOCKED" not in final_df.columns:
-        final_df["LOCKED"] = "NO"
-
-    final_df["LOCKED"] = final_df["LOCKED"].fillna("NO")
-
-    # Add missing columns
-    for col in desired_columns:
-        if col not in final_df.columns:
-            final_df[col] = ""  # safeguard
-
-    if "Diamond Type" not in final_df.columns:
-        final_df["Diamond Type"] = "Unknown"
-
-    final_df["LOCKED"] = final_df.get("LOCKED", "NO")
-    final_df = final_df[desired_columns]
-
-    final_df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
-    s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
-
-def load_stock():
-    try:
-        s3.download_file(AWS_BUCKET, COMBINED_STOCK_KEY, "/tmp/all_suppliers_stock.xlsx")
-        return pd.read_excel("/tmp/all_suppliers_stock.xlsx")
-    except:
-        return pd.DataFrame()
-
 def lock_stone(stone_id):
     if locks_col.find_one({"stone_id": stone_id}):
         return False
@@ -402,39 +313,6 @@ def lock_stone(stone_id):
 def unlock_stone(stone_id):
     locks_col.delete_one({"stone_id": stone_id})
 
-
-def remove_stone_from_supplier_and_combined(stone_id):
-    # Remove from combined stock
-    df = load_stock()
-    if not df.empty and "Stock #" in df.columns:
-        df = df[df["Stock #"] != stone_id]
-        df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
-        s3.upload_file(
-            "/tmp/all_suppliers_stock.xlsx",
-            AWS_BUCKET,
-            COMBINED_STOCK_KEY
-        )
-
-    # Remove from supplier stock
-    objs = s3.list_objects_v2(
-        Bucket=AWS_BUCKET,
-        Prefix=SUPPLIER_STOCK_FOLDER
-    )
-
-    for obj in objs.get("Contents", []):
-        key = obj["Key"]
-        if not key.endswith(".xlsx"):
-            continue
-
-        local = "/tmp/tmp_supplier.xlsx"
-        s3.download_file(AWS_BUCKET, key, local)
-        sdf = pd.read_excel(local)
-
-        if "Stock #" in sdf.columns and stone_id in sdf["Stock #"].values:
-            sdf = sdf[sdf["Stock #"] != stone_id]
-            sdf.to_excel(local, index=False)
-            s3.upload_file(local, AWS_BUCKET, key)
-            break
 
 # ---------------- STATE ----------------
 
@@ -1112,26 +990,14 @@ async def supplier_view_deals(message: types.Message):
 
     for deal in deals_col.find({"supplier_username": supplier_username}):
         rows.append({
-            "Deal ID": deal["deal_id"],
-            "Stone ID": deal["stone_id"],
-            "Client": deal["client_username"],
-            "Actual Price ($/ct)": deal["actual_stock_price"],
-            "Offer Price ($/ct)": deal["client_offer_price"],
-            "Supplier Action (ACCEPT / REJECT)": deal["supplier_action"]
+            "Deal ID": deal.get("deal_id", ""),
+            "Stone ID": deal.get("stone_id", ""),
+            "Client": deal.get("client_username", ""),
+            "Actual Price ($/ct)": deal.get("actual_stock_price", ""),
+            "Offer Price ($/ct)": deal.get("client_offer_price", ""),
+            "Supplier Action (ACCEPT / REJECT)": deal.get("supplier_action", "")
         })
-
-        if deal.get("supplier_username") != supplier_username:
-            continue
-
-        rows.append({
-            "Deal ID": deal["deal_id"],
-            "Stone ID": deal["stone_id"],
-            "Client": deal["client_username"],
-            "Actual Price ($/ct)": deal["actual_stock_price"],
-            "Offer Price ($/ct)": deal["client_offer_price"],
-            "Supplier Action (ACCEPT / REJECT)": deal["supplier_action"]
-        })
-
+    
     if not rows:
         await message.reply("ℹ️ No deals available.")
         return
@@ -1381,27 +1247,50 @@ async def handle_text(message: types.Message):
 
 
         # ---- LOGIN FLOW ----
-        if state["step"] == "login_username":
+        if state.get("step") == "login_username":
             state["username"] = message.text.strip()
             state["step"] = "login_password"
-            await message.reply("Enter Password:")
+            await message.reply("🔐 Enter Password:")
             return
 
-        if state["step"] == "login_password":
+
+        if state.get("step") == "login_password":
             df = load_accounts()
 
-            # ✅ Normalize inputs
-            input_username = str(state["username"]).strip().lower()
+            # ✅ Normalize input
+            input_username = str(state.get("username", "")).strip().lower()
             input_password = str(message.text).strip()
 
-            # ✅ Force everything to string
-            df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
-            df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
-            df["PASSWORD"] = df["PASSWORD"].str.replace("\u00a0", "", regex=False)
-            df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
-            df["ROLE"] = df["ROLE"].astype(str).str.strip().str.lower()
+            # ✅ Clean dataframe safely
+            df["USERNAME"] = (
+                df["USERNAME"]
+                .astype(str)
+                .str.replace("\u00a0", "", regex=False)
+                .str.strip()
+                .str.lower()
+            )
 
-            # ✅ Debug safety
+            df["PASSWORD"] = (
+                df["PASSWORD"]
+                .astype(str)
+                .str.replace("\u00a0", "", regex=False)
+                .str.strip()
+            )
+
+            df["APPROVED"] = (
+                df["APPROVED"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+            )
+
+            df["ROLE"] = (
+                df["ROLE"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
+
             print("LOGIN TRY:", input_username, input_password)
             print(df[["USERNAME", "PASSWORD", "APPROVED", "ROLE"]].head())
 
@@ -1420,22 +1309,26 @@ async def handle_text(message: types.Message):
                 user_state.pop(uid, None)
                 return
 
-            # ---------------- FIX FOR PRINCE ----------------
+            # 🔑 Role
             role = r.iloc[0]["ROLE"]
             if r.iloc[0]["USERNAME"].lower() == "prince":
                 role = "admin"
-            # ------------------------------------------------
 
+            # ✅ Save session
             logged_in_users[uid] = {
                 "USERNAME": r.iloc[0]["USERNAME"],
                 "ROLE": role,
-                "SUPPLIER_KEY": f"supplier_{r.iloc[0]['USERNAME'].lower()}" if role == "supplier" else None,
+                "SUPPLIER_KEY": (
+                    f"supplier_{r.iloc[0]['USERNAME'].lower()}"
+                    if role == "supplier"
+                    else None
+                ),
             }
 
             save_sessions()
             log_activity(logged_in_users[uid], "LOGIN")
 
-            # Assign keyboard
+            # 🎛 Keyboard
             if role == "admin":
                 kb = admin_kb
             elif role == "client":
@@ -1447,18 +1340,18 @@ async def handle_text(message: types.Message):
 
             username = r.iloc[0]["USERNAME"].capitalize()
 
-            if role == "admin":
-                welcome_msg = f"👑 Welcome back, Admin {username} — command, control, excellence."
-            elif role == "supplier":
-                welcome_msg = f"💎 Welcome, Supplier {username} — your brilliance drives the market."
-            elif role == "client":
-                welcome_msg = f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
-            else:
-                welcome_msg = f"Welcome, {username}."
+            welcome_map = {
+                "admin": f"👑 Welcome Admin {username}",
+                "supplier": f"💎 Welcome Supplier {username}",
+                "client": f"🥂 Welcome {username}"
+            }
 
-            await message.reply(welcome_msg, reply_markup=kb)
+            await message.reply(
+                welcome_map.get(role, f"Welcome {username}"),
+                reply_markup=kb
+            )
 
-            # 🔔 SHOW SAVED NOTIFICATIONS
+            # 🔔 Notifications
             notifications = fetch_unread_notifications(
                 logged_in_users[uid]["USERNAME"],
                 logged_in_users[uid]["ROLE"]
@@ -1472,6 +1365,7 @@ async def handle_text(message: types.Message):
 
             user_state.pop(uid, None)
             return
+
 
 
     # -------- BUTTON HANDLING --------
@@ -1791,12 +1685,7 @@ async def handle_doc(message: types.Message):
                 "created_at": datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M")
             }
 
-            s3.put_object(
-                Bucket=AWS_BUCKET,
-                Key=f"{DEALS_FOLDER}{deal_id}.json",
-                Body=json.dumps(deal, indent=2),
-                ContentType="application/json"
-            )
+            deals_col.insert_one(deal)
 
             save_notification(
                 deal["supplier_username"],
@@ -1865,10 +1754,8 @@ async def handle_doc(message: types.Message):
             deal_id = str(row.get("Deal ID", "")).strip()
             decision = str(row.get("Supplier Action (ACCEPT / REJECT)", "")).upper()
 
-            key = f"{DEALS_FOLDER}{deal_id}.json"
-            try:
-                deal = json.loads(s3.get_object(Bucket=AWS_BUCKET, Key=key)["Body"].read())
-            except:
+            deal = deals_col.find_one({"deal_id": deal_id})
+            if not deal:
                 continue
 
             if deal["supplier_username"] != user["USERNAME"].lower():
@@ -1894,12 +1781,10 @@ async def handle_doc(message: types.Message):
             if not is_valid_deal_state(deal):
                 continue
 
-            s3.put_object(
-                Bucket=AWS_BUCKET,
-                Key=key,
-                Body=json.dumps(deal, indent=2),
-                ContentType="application/json"
-            )
+            deals_col.update_one(
+                {"deal_id": deal["deal_id"]},
+                {"$set": deal}
+            }
 
         await message.reply("✅ Supplier deal actions processed.")
         return
@@ -1963,18 +1848,15 @@ async def handle_doc(message: types.Message):
 
     supplier_key_name = user.get("SUPPLIER_KEY")
 
-    supplier_key = f"{SUPPLIER_STOCK_FOLDER}{supplier_key_name}.xlsx"
-    local_path = f"/tmp/{supplier_key_name}.xlsx"
+    stock_col.delete_many({"supplier": supplier_key_name})
 
-    df["SUPPLIER"] = supplier_key_name
+    records = df.to_dict("records")
 
-    df.to_excel(local_path, index=False)
-
-    s3.upload_file(
-        local_path,
-        AWS_BUCKET,
-        supplier_key
-    )
+    stock_col.insert_one({
+        "supplier": supplier_key_name,
+        "uploaded_at": datetime.utcnow(),
+        "rows": records
+    })
 
     # rebuild combined stock
 
