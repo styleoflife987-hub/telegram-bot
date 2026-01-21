@@ -1759,7 +1759,7 @@ async def handle_doc(message: types.Message):
 
             supplier_rows.setdefault(supplier, []).append({
                 "Deal ID": deal_id,
-                "Stone ID": stone_id,
+                "Stone #": stone_id,
                 "Actual Price ($/ct)": actual_price,
                 "Offer Price ($/ct)": offer_price,
                 "Profit/Loss ($/ct)": round(offer_price - actual_price, 2)
