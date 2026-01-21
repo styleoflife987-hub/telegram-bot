@@ -19,11 +19,11 @@ import uuid
 
 # ---------------- CONFIG ----------------
 
-TOKEN = "8438406844:AAHjZOLNGsnw531TuLcpmHsumKDjDQ8nr74"
-AWS_ACCESS_KEY = "AKIA3SFAMUMTLVXXXJVY"
-AWS_SECRET_KEY = "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"
-AWS_BUCKET = "diamond-bucket-styleoflifes"
-AWS_REGION = "ap-south-1"
+TOKEN = os.getenv("BOT_TOKEN")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
+AWS_BUCKET = os.getenv("AWS_BUCKET")
 
 ACCOUNTS_KEY = "users/accounts.xlsx"
 STOCK_KEY = "stock/diamonds.xlsx"
@@ -90,6 +90,47 @@ supplier_kb = ReplyKeyboardMarkup(
 
 # ---------------- HELPERS ----------------
 
+def generate_activity_excel():
+    try:
+        objs = s3.list_objects_v2(Bucket=AWS_BUCKET, Prefix=ACTIVITY_LOG_FOLDER)
+        if "Contents" not in objs:
+            return None
+
+        rows = []
+
+        for obj in objs["Contents"]:
+            if not obj["Key"].endswith(".json"):
+                continue
+
+            data = json.loads(
+                s3.get_object(
+                    Bucket=AWS_BUCKET,
+                    Key=obj["Key"]
+                )["Body"].read()
+            )
+
+            for entry in data:
+                rows.append({
+                    "Date": entry.get("date"),
+                    "Time": entry.get("time"),
+                    "Login ID": entry.get("login_id"),
+                    "Role": entry.get("role"),
+                    "Action": entry.get("action"),
+                    "Details": json.dumps(entry.get("details", {}))
+                })
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        path = "/tmp/user_activity_report.xlsx"
+        df.to_excel(path, index=False)
+        return path
+
+    except Exception as e:
+        print("Activity report error:", e)
+        return None
+
 def log_deal_history(deal):
     try:
         s3.download_file(AWS_BUCKET, DEAL_HISTORY_KEY, "/tmp/deal_history.xlsx")
@@ -124,54 +165,6 @@ def log_deal_history(deal):
 
     df.to_excel("/tmp/deal_history.xlsx", index=False)
     s3.upload_file("/tmp/deal_history.xlsx", AWS_BUCKET, DEAL_HISTORY_KEY)
-
-
-def save_notification(username, role, message):
-    key = f"{NOTIFICATIONS_FOLDER}{role}_{username}.json"
-
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=key)
-        data = json.loads(obj["Body"].read())
-    except:
-        data = []
-
-    data.append({
-        "message": message,
-        "time": datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M"),
-        "read": False
-    })
-
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType="application/json"
-    )
-
-
-def fetch_unread_notifications(username, role):
-    key = f"{NOTIFICATIONS_FOLDER}{role}_{username}.json"
-
-    try:
-        obj = s3.get_object(Bucket=AWS_BUCKET, Key=key)
-        data = json.loads(obj["Body"].read())
-    except:
-        return []
-
-    unread = [n for n in data if not n.get("read")]
-
-    # mark as read
-    for n in data:
-        n["read"] = True
-
-    s3.put_object(
-        Bucket=AWS_BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType="application/json"
-    )
-
-    return unread
 
 def log_activity(user, action, details=None):
     if not user:
@@ -314,12 +307,21 @@ def load_stock():
     except:
         return pd.DataFrame()
 
+def unlock_stone(stone_id):
+    df = load_stock()
+    if df.empty or "Stock #" not in df.columns:
+        return
+
+    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
+    df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
+    s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
+
 
 def remove_stone_from_supplier_and_combined(stone_id):
     # Remove from combined stock
     df = load_stock()
-    if not df.empty and "STONE ID" in df.columns:
-        df = df[df["STONE ID"] != stone_id]
+    if not df.empty and "Stock #" in df.columns:
+        df = df[df["Stock #"] != stone_id]
         df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
         s3.upload_file(
             "/tmp/all_suppliers_stock.xlsx",
@@ -342,12 +344,11 @@ def remove_stone_from_supplier_and_combined(stone_id):
         s3.download_file(AWS_BUCKET, key, local)
         sdf = pd.read_excel(local)
 
-        if "STONE ID" in sdf.columns and stone_id in sdf["STONE ID"].values:
-            sdf = sdf[sdf["STONE ID"] != stone_id]
+        if "Stock #" in sdf.columns and stone_id in sdf["Stock #"].values:
+            sdf = sdf[sdf["Stock #"] != stone_id]
             sdf.to_excel(local, index=False)
             s3.upload_file(local, AWS_BUCKET, key)
             break
-
 # ---------------- STATE ----------------
 
 def save_sessions():
@@ -554,11 +555,9 @@ async def smart_deals(message: types.Message):
 
         msg = (
             f"💎 {r['Weight']} ct | {r['Shape']} | {r['Color']} | {r['Clarity']}\n"
-            f"💰 ${price} / ct\n"
-            f"📉 {r['DISCOUNT_%']}% below market\n"
-            f"🏛 Lab: {r.get('Lab', 'N/A')} | 📦 {r.get('Availability', 'N/A')}\n"
+            f"💰 ${r.get('Price Per Carat', 'N/A')} / ct\n"
+            f"🏛 Lab: {r.get('Lab', 'N/A')} | 📦 {r.get('STOCK STATUS', 'N/A')}\n"
         )
-
         await message.reply(msg)
 
 
@@ -859,8 +858,8 @@ async def supplier_leaderboard(message: types.Message):
         return
 
     # ✅ FIX: convert price to numeric
-    df["CT/PR $"] = pd.to_numeric(df["CT/PR $"], errors="coerce")
-    df = df.dropna(subset=["CT/PR $", "SUPPLIER"])
+    df["Price Per Carat"] = pd.to_numeric(df["Price Per Carat"], errors="coerce")
+    df = df.dropna(subset=["Price Per Carat", "SUPPLIER"])
 
     if df.empty:
         await message.reply("❌ No valid pricing data")
@@ -870,7 +869,7 @@ async def supplier_leaderboard(message: types.Message):
         df.groupby("SUPPLIER")
         .agg(
             Stones=("SUPPLIER", "count"),
-            Avg_Price=("CT/PR $", "mean")
+            Avg_Price=("Price Per Carat", "mean")
         )
         .sort_values("Stones", ascending=False)
     )
@@ -1245,9 +1244,6 @@ async def handle_text(message: types.Message):
             # Allow any offer price (lower / equal / higher)
             admin_profit_value = round(offer_price - actual_price, 2)
 
-            # 💰 Admin profit logic (5%)
-            admin_profit_value = round(offer_price - actual_price, 2)
-
             deal = {
                 "deal_id": deal_id,
                 "stone_id": stone_id,
@@ -1425,7 +1421,7 @@ async def handle_text(message: types.Message):
     if text == "📥 Download Sample Excel":
         # Create sample Excel in memory
         df = pd.DataFrame({
-            "STONE ID": ["D001", "D002", "D003"],
+            "Stock #": ["D001", "D002", "D003"],
             "LOCATION": ["Mumbai", "Delhi", "Bangalore"],
             "Shape": ["Round", "Oval", "Princess"],
             "Carat": [1.0, 1.5, 2.0],
@@ -1435,7 +1431,7 @@ async def handle_text(message: types.Message):
             "PO": ["PO123", "PO124", "PO125"],
             "Symmetry": ["Excellent", "Very Good", "Good"],
             "FLS": ["Yes", "No", "Yes"],
-            "CT/PR $": [10000, 15000, 20000],
+            "Price Per Carat": [10000, 15000, 20000],
             "Total Price": [10000, 15000, 20000],
             "MEASURMENT": ["6.5x6.5x4.0", "7.0x5.5x3.5", "8.0x6.0x4.0"],
             "TABLE %": [57, 58, 59],
@@ -1633,7 +1629,7 @@ async def handle_text(message: types.Message):
                 out = "/tmp/results.xlsx"
 
                 # 🔒 REMOVE SUPPLIER COLUMN FOR CLIENT VIEW ONLY
-                excel_df = df.rename(columns={"SUPPLIER": "Supplier"})
+                excel_df = df.drop(columns=["SUPPLIER"], errors="ignore")
                 excel_df.to_excel(out, index=False)
 
                 await message.reply_document(
@@ -1643,10 +1639,11 @@ async def handle_text(message: types.Message):
             else:
                 for _, r in df.iterrows():
                     msg = (
-                        f"💎 {r['Carat']} ct | {r['Shape']} | {r['Color']} | {r['Clarity']}\n"
-                        f"💰 ${r.get('CT/PR $', 'N/A')} / ct\n"
-                        f"🏛 Lab: {r.get('LAB', 'N/A')} | 📦 {r.get('STOCK STATUS', 'N/A')}\n"
+                        f"💎 {r['Weight']} ct | {r['Shape']} | {r['Color']} | {r['Clarity']}\n"
+                        f"💰 ${r.get('Price Per Carat', 'N/A')} / ct\n"
+                        f"🏛 Lab: {r.get('Lab', 'N/A')} | 📦 {r.get('STOCK STATUS', 'N/A')}\n"
                     )
+
                     await message.reply(msg)
 
             log_activity(
@@ -1693,18 +1690,21 @@ async def handle_doc(message: types.Message):
         supplier_rows = {}
 
         for _, row in df.iterrows():
-            stone_id = str(row["Stock #"]).strip()
-            offer_price = float(row["Offer Price ($/ct)"])
+            if "Stock #" not in row or "Offer Price ($/ct)" not in row:
+                continue
 
-            stock_row = stock_df[stock_df["Stock #"] == stone_id]
-            if stock_row.empty:
+            stone_id = str(row["Stock #"]).strip()
+
+            try:
+                offer_price = float(row["Offer Price ($/ct)"])
+            except:
                 continue
 
             r = stock_row.iloc[0]
             actual_price = float(r["Price Per Carat"])
             supplier = r["SUPPLIER"].replace("supplier_", "").lower()
 
-            deal_id = f"DEAL-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uid}"
+            deal_id = f"DEAL-{uuid.uuid4().hex[:12]}"
 
             deal = {
                 "deal_id": deal_id,
@@ -1713,6 +1713,7 @@ async def handle_doc(message: types.Message):
                 "client_username": user["USERNAME"],
                 "actual_stock_price": actual_price,
                 "client_offer_price": offer_price,
+                "admin_profit_value": profit = round(offer_price - actual_price, 2)
                 "supplier_action": "PENDING",
                 "admin_action": "PENDING",
                 "final_status": "OPEN",
@@ -1875,7 +1876,7 @@ async def handle_doc(message: types.Message):
 
     required_cols = [
         "Stock #","Shape","Weight","Color","Clarity",
-        "Price Per Carat","Final Price","Lab","Report #"
+        "Price Per Carat","Total Price","Lab","Report #"
     ]
 
     missing = [c for c in required_cols if c not in df.columns]
