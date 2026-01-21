@@ -1063,7 +1063,7 @@ async def view_deals(message: types.Message):
                 "Client": d["client_username"],
                 "Actual Price ($/ct)": d.get("actual_stock_price", 0),
                 "Client Offer ($/ct)": d.get("client_offer_price", 0),
-                "Supplier Action": d.get("supplier_action"),
+                "Supplier Action (ACCEPT / REJECT)": "",
                 "Admin Action": d.get("admin_action"),
                 "Final Status": d.get("final_status"),
             }
@@ -1814,6 +1814,7 @@ async def handle_doc(message: types.Message):
         # 🚫 Prevent editing closed deals
         if deal.get("final_status") in ["COMPLETED", "CLOSED"]:
             continue
+            
 
 # ---------------- SUPPLIER ACTION ----------------
 if supplier_decision == "ACCEPT":
@@ -1862,6 +1863,100 @@ deal["supplier_action"] = "ACCEPTED"
                     "supplier",
                     f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
                 )
+
+        # ==========================================================
+    # ✅ SUPPLIER DEAL APPROVAL EXCEL
+    # ==========================================================
+    if (
+        user["ROLE"] == "supplier"
+        and message.document.file_name.lower().endswith(".xlsx")
+    ):
+
+        file = await bot.get_file(message.document.file_id)
+        path = f"/tmp/{message.document.file_name}"
+        await bot.download_file(file.file_path, path)
+
+        df = pd.read_excel(path)
+
+        required_cols = [
+            "Deal ID",
+            "Supplier Action (ACCEPT / REJECT)"
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                await message.reply("❌ Invalid supplier approval Excel format.")
+                return
+
+        for _, row in df.iterrows():
+
+            deal_id = str(row["Deal ID"]).strip()
+            decision = str(
+                row["Supplier Action (ACCEPT / REJECT)"]
+            ).strip().upper()
+
+            if not deal_id.startswith("DEAL-"):
+                continue
+
+            key = f"{DEALS_FOLDER}{deal_id}.json"
+
+            try:
+                deal = json.loads(
+                    s3.get_object(
+                        Bucket=AWS_BUCKET,
+                        Key=key
+                    )["Body"].read()
+                )
+            except:
+                continue
+
+            # 🔐 Only supplier who owns the deal can update
+            if deal.get("supplier_username") != user["USERNAME"].lower():
+                continue
+
+            # 🚫 Prevent editing closed deals
+            if deal.get("final_status") in ["COMPLETED", "CLOSED"]:
+                continue
+
+            # ---------------- SUPPLIER DECISION ----------------
+            if decision == "ACCEPT":
+                deal["supplier_action"] = "ACCEPTED"
+
+                save_notification(
+                    deal["client_username"],
+                    "client",
+                    f"✅ Supplier accepted deal for Stone {deal['stone_id']}"
+                )
+
+            elif decision == "REJECT":
+                deal["supplier_action"] = "REJECTED"
+                deal["admin_action"] = "REJECTED"
+                deal["final_status"] = "CLOSED"
+
+                # 🔓 Unlock stone
+                unlock_stone(deal["stone_id"])
+
+                save_notification(
+                    deal["client_username"],
+                    "client",
+                    f"❌ Supplier rejected deal for Stone {deal['stone_id']}"
+                )
+
+            else:
+                continue
+
+            # ---------------- SAVE DEAL ----------------
+            log_deal_history(deal)
+
+            s3.put_object(
+                Bucket=AWS_BUCKET,
+                Key=key,
+                Body=json.dumps(deal, indent=2),
+                ContentType="application/json"
+            )
+
+        await message.reply("✅ Supplier deal decisions processed successfully.")
+        return
+
 
             # ---------------- SAVE DEAL ----------------
             log_deal_history(deal)
