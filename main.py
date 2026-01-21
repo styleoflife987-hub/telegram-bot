@@ -1034,11 +1034,19 @@ async def view_deals(message: types.Message):
 
     found = False
 
+    # ✅ MISSING LOOP FIXED HERE
+    for obj in objs["Contents"]:
+        if not obj["Key"].endswith(".json"):
+            continue
+
         deal_obj = s3.get_object(
             Bucket=AWS_BUCKET,
             Key=obj["Key"]
         )
-        deal = json.loads(deal_obj["Body"].read().decode("utf-8"))
+
+        deal = json.loads(
+            deal_obj["Body"].read().decode("utf-8")
+        )
 
         # ---------- SAFETY DEFAULTS ----------
         supplier_price = deal.get("actual_stock_price", 0)
@@ -1048,6 +1056,9 @@ async def view_deals(message: types.Message):
         supplier_action = deal.get("supplier_action", "")
         admin_action = deal.get("admin_action", "")
         final_status = deal.get("final_status", "")
+
+        # (rest of your existing logic continues below...)
+
 
         # =================================================
         # ================= SUPPLIER VIEW =================
