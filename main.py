@@ -93,19 +93,34 @@ supplier_kb = ReplyKeyboardMarkup(
 
 def generate_activity_excel():
     try:
-        objs = s3.list_objects_v2(Bucket=AWS_BUCKET, Prefix=ACTIVITY_LOG_FOLDER)
-        if "Contents" not in objs:
+        objs = s3.list_objects_v2(
+            Bucket=AWS_BUCKET,
+            Prefix=ACTIVITY_LOG_FOLDER
+        )
+
+        if "Contents" not in objs or not objs["Contents"]:
             return None
 
         rows = []
 
-            data = json.loads(
-                s3.get_object(
+        # ✅ LOOP THROUGH ALL ACTIVITY FILES
+        for obj in objs["Contents"]:
+            if not obj["Key"].endswith(".json"):
+                continue
+
+            try:
+                raw = s3.get_object(
                     Bucket=AWS_BUCKET,
                     Key=obj["Key"]
-                )["Body"].read()
-            )
+                )["Body"].read().decode("utf-8")
 
+                data = json.loads(raw)
+
+            except Exception as e:
+                print("Failed to read activity file:", obj["Key"], e)
+                continue
+
+            # ✅ COLLECT ENTRIES
             for entry in data:
                 rows.append({
                     "Date": entry.get("date"),
@@ -122,6 +137,7 @@ def generate_activity_excel():
         df = pd.DataFrame(rows)
         path = "/tmp/user_activity_report.xlsx"
         df.to_excel(path, index=False)
+
         return path
 
     except Exception as e:
