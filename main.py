@@ -9,7 +9,6 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
-from aiogram import types
 import os
 import json
 import pytz
@@ -21,6 +20,8 @@ import time
 # ---------------- CONFIG ----------------
 
 TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("❌ BOT_TOKEN environment variable not set")
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
@@ -150,17 +151,18 @@ def log_deal_history(deal):
         df = pd.read_excel("/tmp/deal_history.xlsx")
     except:
         df = pd.DataFrame(columns=[
-            "Stock #","Availability","Shape","Weight","Color","Clarity","Cut",
-            "Polish","Symmetry","Fluorescence Color","Measurements","Shade",
-            "Milky","Eye Clean","Lab","Report #","Location","Treatment",
-            "Discount","Price Per Carat","Final Price","Depth %","Table %",
-            "Girdle Thin","Girdle Thick","Girdle %","Girdle Condition",
-            "Culet Size","Culet Condition","Crown Height","Crown Angle",
-            "Pavilion Depth","Pavilion Angle","Inscription","Cert comment",
-            "KeyToSymbols","White Inclusion","Black Inclusion","Open Inclusion",
-            "Fancy Color","Fancy Color Intensity","Fancy Color Overtone",
-            "Country","State","City","CertFile","Diamond Video","Diamond Image"
-       ])
+            "Deal ID",
+            "Stone ID",
+            "Supplier",
+            "Client",
+            "Actual Price",
+            "Offer Price",
+            "Supplier Action",
+            "Admin Action",
+            "Final Status",
+            "Created At"
+        ])
+
 
 
     df = pd.concat([
@@ -572,7 +574,7 @@ async def smart_deals(message: types.Message):
         msg = (
             f"💎 {r['Weight']} ct | {r['Shape']} | {r['Color']} | {r['Clarity']}\n"
             f"💰 ${r.get('Price Per Carat', 'N/A')} / ct\n"
-            f"🏛 Lab: {r.get('Lab', 'N/A')} | 📦 {r.get('STOCK STATUS', 'N/A')}\n"
+            f"🏛 Lab: {r.get('Lab', 'N/A')} | 🔒 Locked: {r.get('LOCKED', 'N/A')}\n"
         )
         await message.reply(msg)
 
@@ -715,11 +717,16 @@ async def deal_accept(callback: types.CallbackQuery):
         message=f"⏳ Supplier accepted your offer for Stone {deal['stone_id']}"
     )
 
-    save_notification(
-        username="prince",
-        role="admin",
-        message=f"📝 Deal {deal_id} awaiting admin approval"
-    )
+    # Notify all admins
+    accounts = load_accounts()
+    admins = accounts[accounts["ROLE"] == "admin"]["USERNAME"].tolist()
+
+    for admin_user in admins:
+        save_notification(
+            username=admin_user,
+            role="admin",
+            message=f"📝 Deal {deal_id} awaiting admin approval"
+        )
 
     await callback.message.edit_text("✅ Deal accepted and sent to admin")
     await callback.answer()
@@ -826,6 +833,7 @@ async def view_all_stock(message: types.Message):
         return
 
     total_diamonds = len(df)
+    df["Weight"] = pd.to_numeric(df["Weight"], errors="coerce").fillna(0)
     total_carats = round(df["Weight"].sum(), 2)
 
     msg = f"💎 Total Diamonds: {total_diamonds}\n📊 Total Carats: {total_carats}\n"
@@ -930,7 +938,12 @@ async def supplier_my_stock(message: types.Message):
     if not user or user["ROLE"] != "supplier":
         return
 
-    key = f"{SUPPLIER_STOCK_FOLDER}{user.get('SUPPLIER_KEY')}.xlsx"
+    supplier_key = user.get("SUPPLIER_KEY")
+    if not supplier_key:
+        await message.reply("❌ Supplier key missing. Contact admin.")
+        return
+
+    key = f"{SUPPLIER_STOCK_FOLDER}{supplier_key}.xlsx"
     local = "/tmp/my_stock.xlsx"
 
     try:
@@ -977,7 +990,7 @@ async def supplier_price_excel_analytics(message: types.Message):
         df["Diamond Type"].str.lower()
     )
 
-    my_df = df[df["SUPPLIER"] == supplier_name]
+    my_df = df[df["SUPPLIER"].str.lower() == supplier_name.lower()]
     if my_df.empty:
         await message.reply("❌ You have no stones uploaded.")
         return
@@ -987,7 +1000,7 @@ async def supplier_price_excel_analytics(message: types.Message):
         key = row["MATCH_KEY"]
         my_price = row["Price Per Carat"]
         market = df[df["MATCH_KEY"] == key]
-        best_price = market["Price Per Carat"].min() if len(market) > 1 else my_price
+        best_price = market["Price Per Carat"].min()
         diff = round(my_price - best_price, 2)
         status = "BEST PRICE" if diff == 0 else "OVERPRICED" if diff > 0 else "UNDERPRICED"
 
@@ -1116,6 +1129,10 @@ async def view_deals(message: types.Message):
 
             rows = []
 
+            for obj in objs["Contents"]:
+                if not obj["Key"].endswith(".json"):
+                    continue
+
                 deal = json.loads(
                     s3.get_object(
                         Bucket=AWS_BUCKET,
@@ -1128,9 +1145,16 @@ async def view_deals(message: types.Message):
                     deal.get("supplier_action") == "ACCEPTED"
                     and deal.get("admin_action") == "PENDING"
                 ):
-                    actual = pd.to_numeric(deal.get("actual_stock_price", 0), errors="coerce")
+                    actual = pd.to_numeric(
+                        deal.get("actual_stock_price", 0), errors="coerce"
+                    )
                     actual = 0 if pd.isna(actual) else actual
-                    offer = pd.to_numeric(deal.get("client_offer_price", 0), errors="coerce") or 0
+
+                    offer = pd.to_numeric(
+                        deal.get("client_offer_price", 0), errors="coerce"
+                    )
+                    offer = 0 if pd.isna(offer) else offer
+
                     profit = round(offer - actual, 2)
 
                     rows.append({
@@ -1141,11 +1165,7 @@ async def view_deals(message: types.Message):
                         "Actual Price ($/ct)": actual,
                         "Offer Price ($/ct)": offer,
                         "Profit / Loss ($/ct)": profit,
-                        "Supplier Action (ACCEPT / REJECT)": (
-                            "ACCEPT" if deal.get("supplier_action") == "ACCEPTED"
-                            else "REJECT" if deal.get("supplier_action") == "REJECTED"
-                            else "PENDING"
-                        ),
+                        "Supplier Action (ACCEPT / REJECT)": deal.get("supplier_action"),
                         "Admin Action (YES / NO)": ""
                     })
 
@@ -1290,6 +1310,9 @@ async def handle_text(message: types.Message):
                 Body=json.dumps(deal, indent=2),
                 ContentType="application/json"
             )
+            df.loc[df["Stock #"] == stone_id, "LOCKED"] = "YES"
+            df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
+            s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
 
             # Notify supplier
             save_notification(
@@ -1442,27 +1465,26 @@ async def handle_text(message: types.Message):
         # Create sample Excel in memory
         df = pd.DataFrame({
             "Stock #": ["D001", "D002", "D003"],
-            "LOCATION": ["Mumbai", "Delhi", "Bangalore"],
+            "Loaction": ["Mumbai", "Delhi", "Bangalore"],
             "Shape": ["Round", "Oval", "Princess"],
-            "Carat": [1.0, 1.5, 2.0],
+            "Weight": [1.0, 1.5, 2.0],
             "Color": ["White", "Yellow", "Pink"],
             "Clarity": ["VVS", "VS", "SI"],
-            "CUT": ["Excellent", "Very Good", "Good"],
-            "PO": ["PO123", "PO124", "PO125"],
+            "Cut": ["Excellent", "Very Good", "Good"],
+            "Polish": ["PO123", "PO124", "PO125"],
             "Symmetry": ["Excellent", "Very Good", "Good"],
             "FLS": ["Yes", "No", "Yes"],
             "Price Per Carat": [10000, 15000, 20000],
             "Total Price": [10000, 15000, 20000],
-            "MEASURMENT": ["6.5x6.5x4.0", "7.0x5.5x3.5", "8.0x6.0x4.0"],
-            "TABLE %": [57, 58, 59],
-            "DEPTH %": [61, 62, 63],
-            "VIDEO": ["link1", "link2", "link3"],
+            "Measurment": ["6.5x6.5x4.0", "7.0x5.5x3.5", "8.0x6.0x4.0"],
+            "Table %": [57, 58, 59],
+            "Depth %": [61, 62, 63],
+            "Video": ["link1", "link2", "link3"],
             "Report #": ["R001", "R002", "R003"],
-            "LAB": ["GIA", "IGI", "HRD"],
-            "COMPANY COMMENT": ["Good quality", "Premium", "Rare cut"],
-            "IMAGE": ["img1.jpg", "img2.jpg", "img3.jpg"],
-            "STOCK STATUS": ["Available", "Reserved", "Sold"],
-            "CERTIFICATE LINK": ["cert1.pdf", "cert2.pdf", "cert3.pdf"],
+            "Lab": ["GIA", "IGI", "HRD"],
+            "Cpmapany Comment": ["Good quality", "Premium", "Rare cut"],
+            "Image": ["img1.jpg", "img2.jpg", "img3.jpg"],
+            "Stock Status": ["Available", "Reserved", "Sold"],
             "Contact Number": ["1234567890", "0987654321", "1122334455"],
             "Diamond Type": ["Natural", "LGD", "HPHT"]
         })
@@ -1661,7 +1683,7 @@ async def handle_text(message: types.Message):
                     msg = (
                         f"💎 {r['Weight']} ct | {r['Shape']} | {r['Color']} | {r['Clarity']}\n"
                         f"💰 ${r.get('Price Per Carat', 'N/A')} / ct\n"
-                        f"🏛 Lab: {r.get('Lab') or r.get('LAB') or 'N/A'} | 📦 {r.get('STOCK STATUS', 'N/A')}\n"
+                        f"🏛 Lab: {r.get('Lab', 'N/A')} | 🔒 Locked: {r.get('LOCKED', 'N/A')}\n"
                     )
 
                     await message.reply(msg)
@@ -1836,6 +1858,7 @@ async def handle_doc(message: types.Message):
                 deal["supplier_action"] = "REJECTED"
                 deal["admin_action"] = "REJECTED"
                 deal["final_status"] = "CLOSED"
+                unlock_stone(deal["stone_id"])
 
             # ---------------- ADMIN ACTION ----------------
             if admin_decision == "YES" and deal.get("supplier_action") == "ACCEPTED":
