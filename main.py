@@ -1814,55 +1814,56 @@ async def handle_doc(message: types.Message):
         # 🚫 Prevent editing closed deals
         if deal.get("final_status") in ["COMPLETED", "CLOSED"]:
             continue
-            
 
-# ---------------- SUPPLIER ACTION ----------------
-if supplier_decision == "ACCEPT":
-    deal["supplier_action"] = "ACCEPTED"
-deal["supplier_action"] = "ACCEPTED"
 
-            elif supplier_decision == "REJECT":
-                deal["supplier_action"] = "REJECTED"
-                deal["admin_action"] = "REJECTED"
-                deal["final_status"] = "CLOSED"
-                unlock_stone(deal["stone_id"])
+                # ---------------- SUPPLIER ACTION ----------------
+        if supplier_decision == "ACCEPT":
+            deal["supplier_action"] = "ACCEPTED"
 
-            # ---------------- ADMIN ACTION ----------------
-            if admin_decision == "YES" and deal.get("supplier_action") == "ACCEPTED":
-                deal["admin_action"] = "APPROVED"
-                deal["final_status"] = "COMPLETED"
+        elif supplier_decision == "REJECT":
+            deal["supplier_action"] = "REJECTED"
+            deal["admin_action"] = "REJECTED"
+            deal["final_status"] = "CLOSED"
+            unlock_stone(deal["stone_id"])
 
-                remove_stone_from_supplier_and_combined(
-                    deal["stone_id"]
-                )
 
-                save_notification(
-                    deal["client_username"],
-                    "client",
-                    f"🎉 Deal APPROVED for Stone {deal['stone_id']}"
-                )
+        # ---------------- ADMIN ACTION ----------------
+        if admin_decision == "YES" and deal.get("supplier_action") == "ACCEPTED":
+            deal["admin_action"] = "APPROVED"
+            deal["final_status"] = "COMPLETED"
 
-                save_notification(
-                    deal["supplier_username"],
-                    "supplier",
-                    f"✅ Deal APPROVED for Stone {deal['stone_id']}"
-                )
+            remove_stone_from_supplier_and_combined(
+                deal["stone_id"]
+            )
 
-            elif admin_decision == "NO":
-                deal["admin_action"] = "REJECTED"
-                deal["final_status"] = "CLOSED"
+            save_notification(
+                deal["client_username"],
+                "client",
+                f"🎉 Deal APPROVED for Stone {deal['stone_id']}"
+            )
 
-                save_notification(
-                    deal["client_username"],
-                    "client",
-                    f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
-                )
+            save_notification(
+                deal["supplier_username"],
+                "supplier",
+                f"✅ Deal APPROVED for Stone {deal['stone_id']}"
+            )
 
-                save_notification(
-                    deal["supplier_username"],
-                    "supplier",
-                    f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
-                )
+        elif admin_decision == "NO":
+            deal["admin_action"] = "REJECTED"
+            deal["final_status"] = "CLOSED"
+
+            save_notification(
+                deal["client_username"],
+                "client",
+                f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
+            )
+
+            save_notification(
+                deal["supplier_username"],
+                "supplier",
+                f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
+            )
+
 
         # ==========================================================
     # ✅ SUPPLIER DEAL APPROVAL EXCEL
