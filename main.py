@@ -1155,8 +1155,8 @@ async def view_deals(message: types.Message):
 
         for d in deals:
             if d.get("supplier_action") == "ACCEPTED" and d.get("admin_action") == "PENDING":
-                actual = float(d.get("actual_stock_price", 0))
-                offer = float(d.get("client_offer_price", 0))
+                actual = float(d.get("actual_stock_price") or 0)
+                offer = float(d.get("client_offer_price") or 0)
                 profit = round(offer - actual, 2)
 
                 rows.append({
@@ -1768,6 +1768,8 @@ async def handle_doc(message: types.Message):
 
         supplier_rows = {}
 
+        processed_stones = set()
+
         for _, row in df.iterrows():
             if pd.isna(row.get("Stock #")) or pd.isna(row.get("Offer Price ($/ct)")):
                 continue
@@ -1811,6 +1813,10 @@ async def handle_doc(message: types.Message):
                 "supplier_action": "PENDING",
                 "admin_action": "PENDING",
                 "final_status": "OPEN",
+
+                "created_at": datetime.now(
+                    pytz.timezone("Asia/Kolkata")
+                ).strftime("%Y-%m-%d %H:%M"),
             }
 
             s3.put_object(
@@ -1895,7 +1901,7 @@ async def handle_doc(message: types.Message):
 
 
             admin_decision = str(
-                row["Admin Action (YES / NO)"]
+                row.get("Admin Action (YES / NO)", "")
             ).strip().upper()
 
             key = f"{DEALS_FOLDER}{deal_id}.json"
@@ -1978,7 +1984,7 @@ async def handle_doc(message: types.Message):
             )
 
         await message.reply("✅ Admin deal decisions processed successfully.")
-
+        return
 
     # ==========================================================
     # ✅ SUPPLIER DEAL APPROVAL EXCEL
@@ -2007,10 +2013,14 @@ async def handle_doc(message: types.Message):
 
         for _, row in df.iterrows():
 
+            if pd.isna(row.get("Deal ID")):
+                continue
+
             deal_id = str(row["Deal ID"]).strip()
             decision = str(
-                row["Supplier Action (ACCEPT / REJECT)"]
+                row.get("Supplier Action (ACCEPT / REJECT)", "")
             ).strip().upper()
+
 
             if not deal_id.startswith("DEAL-"):
                 continue
@@ -2139,9 +2149,17 @@ async def handle_doc(message: types.Message):
 
     df["SUPPLIER"] = supplier_key_name
 
-    # ✅ Ensure LOCKED column exists
+    existing = load_stock()
     if "LOCKED" not in df.columns:
         df["LOCKED"] = "NO"
+
+    # ✅ Preserve already locked stones
+    if not existing.empty and "LOCKED" in existing.columns:
+        locked_map = dict(
+            zip(existing["Stock #"], existing["LOCKED"])
+        )
+        df["LOCKED"] = df["Stock #"].map(locked_map).fillna(df["LOCKED"])
+
 
     df.to_excel(local_path, index=False)
 
