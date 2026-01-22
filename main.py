@@ -1457,7 +1457,7 @@ async def handle_text(message: types.Message):
                     f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
                 )
 
-            else:
+                else:
                 welcome_msg = f"Welcome, {username}."
 
             await message.reply(
@@ -1472,15 +1472,13 @@ async def handle_text(message: types.Message):
             )
 
             if notifications:
-                note_msg = "🔔 Notifications\n\n"
-                for n in notifications:
+                    note_msg = "🔔 Notifications\n\n"
+                    for n in notifications:
                     note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
                 await message.reply(note_msg)
 
+            # ✅ Clear login state only once
             user_state.pop(uid, None)
-
-
-
 
     # -------- BUTTON HANDLING --------
     user = get_logged_user(uid)
@@ -1803,6 +1801,11 @@ async def handle_doc(message: types.Message):
                 continue
 
             stone_id = str(row["Stock #"]).strip()
+
+            # ✅ Prevent duplicate stone in same Excel upload
+            if stone_id in processed_stones:
+                continue
+            processed_stones.add(stone_id)
 
             try:
                 offer_price = float(row["Offer Price ($/ct)"])
