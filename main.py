@@ -1284,7 +1284,9 @@ async def handle_text(message: types.Message):
 
             deal_id = f"DEAL-{uuid.uuid4().hex[:10]}"
 
-            actual_price = pd.to_numeric(r["Price Per Carat"], errors="coerce") or 0
+            actual_price = pd.to_numeric(r["Price Per Carat"], errors="coerce")
+            if pd.isna(actual_price):
+                actual_price = 0
 
             # Allow any offer price (lower / equal / higher)
             admin_profit_value = round(offer_price - actual_price, 2)
@@ -1720,10 +1722,28 @@ def lock_stone(stone_id: str):
     df.to_excel(temp, index=False)
     s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
 
+
+def unlock_stone(stone_id: str):
+    df = load_stock()
+    if df.empty:
+        return
+
+    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
+    temp = "/tmp/all_suppliers_stock.xlsx"
+    df.to_excel(temp, index=False)
+    s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
+
+
 # ---------------- DOCUMENT HANDLER ----------------
 
 @dp.message(F.document)
 async def handle_doc(message: types.Message):
+
+    # ❗ FILE SIZE LIMIT (10 MB) — CHECK FIRST
+    if message.document.file_size > 10 * 1024 * 1024:
+        await message.reply("❌ File too large. Max allowed size is 10 MB.")
+        return
+
     uid = message.from_user.id
     user = get_logged_user(uid)
 
@@ -1759,16 +1779,23 @@ async def handle_doc(message: types.Message):
             except:
                 continue
 
-            stock_row = stock_df[
-                (stock_df["Stock #"] == stone_id) &
-                (stock_df.get("LOCKED", "NO") != "YES")
-            ]
+            if "LOCKED" in stock_df.columns:
+                stock_row = stock_df[
+                    (stock_df["Stock #"] == stone_id) &
+                    (stock_df["LOCKED"] != "YES")
+                ]
+            else:
+                stock_row = stock_df[stock_df["Stock #"] == stone_id]
 
             if stock_row.empty:
                 continue
 
+
             r = stock_row.iloc[0]
-            actual_price = pd.to_numeric(r["Price Per Carat"], errors="coerce") or 0
+            actual_price = pd.to_numeric(r["Price Per Carat"], errors="coerce")
+            if pd.isna(actual_price):
+                actual_price = 0
+
             supplier = r["SUPPLIER"].replace("supplier_", "").lower()
 
             deal_id = f"DEAL-{uuid.uuid4().hex[:12]}"
@@ -1853,6 +1880,9 @@ async def handle_doc(message: types.Message):
 
         for _, row in df.iterrows():
 
+            if pd.isna(row.get("Deal ID")):
+                continue
+
             deal_id = str(row["Deal ID"]).strip()
 
             # ✅ Validate Deal ID
@@ -1860,8 +1890,9 @@ async def handle_doc(message: types.Message):
                 continue
 
             supplier_decision = str(
-                row["Supplier Action (ACCEPT / REJECT)"]
+                row.get("Supplier Action (ACCEPT / REJECT)", "")
             ).strip().upper()
+
 
             admin_decision = str(
                 row["Admin Action (YES / NO)"]
@@ -1920,11 +1951,15 @@ async def handle_doc(message: types.Message):
                 deal["admin_action"] = "REJECTED"
                 deal["final_status"] = "CLOSED"
 
+                # 🔓 Unlock stone
+                unlock_stone(deal["stone_id"])
+
                 save_notification(
                     deal["client_username"],
                     "client",
                     f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
                 )
+
 
                 save_notification(
                     deal["supplier_username"],
@@ -2041,12 +2076,6 @@ async def handle_doc(message: types.Message):
         await message.reply(f"✅ Supplier deal decisions processed successfully. ({processed} deals)")
         return   # ✅ IMPORTANT: stop further processing
 
-
-    # ❗ FILE SIZE LIMIT (10 MB)
-    if message.document.file_size > 10 * 1024 * 1024:
-        await message.reply("❌ File too large. Max allowed size is 10 MB.")
-        return
-
     if user["ROLE"] != "supplier":
         await message.reply("❌ Only suppliers can upload diamonds")
         return
@@ -2110,6 +2139,10 @@ async def handle_doc(message: types.Message):
 
     df["SUPPLIER"] = supplier_key_name
 
+    # ✅ Ensure LOCKED column exists
+    if "LOCKED" not in df.columns:
+        df["LOCKED"] = "NO"
+
     df.to_excel(local_path, index=False)
 
     s3.upload_file(
@@ -2117,6 +2150,7 @@ async def handle_doc(message: types.Message):
         AWS_BUCKET,
         supplier_key
     )
+
 
     # rebuild combined stock
 
