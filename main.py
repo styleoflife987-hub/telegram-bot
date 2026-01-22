@@ -179,7 +179,7 @@ def log_deal_history(deal):
             "Final Status": deal.get("final_status"),
             "Created At": deal.get("created_at"),
         }])
-    ], ignore_index=True)
+     , ignore_index=True)
 
     df.to_excel("/tmp/deal_history.xlsx", index=False)
     s3.upload_file("/tmp/deal_history.xlsx", AWS_BUCKET, DEAL_HISTORY_KEY)
