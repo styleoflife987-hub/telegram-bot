@@ -2202,6 +2202,6 @@ def start_bot():
     async def runner():
         print("💎 Bot is starting...")
         load_sessions()
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, handle_signals=False)
 
     asyncio.run(runner())
