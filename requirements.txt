@@ -10,3 +10,5 @@ pymongo
 dnspython
 python-dotenv
 fastapi
+uvicorn
+aiogram  
