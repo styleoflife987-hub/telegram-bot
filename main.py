@@ -1457,7 +1457,7 @@ async def handle_text(message: types.Message):
                     f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
                 )
 
-                else:
+            else:
                 welcome_msg = f"Welcome, {username}."
 
             await message.reply(
