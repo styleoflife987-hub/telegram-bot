@@ -1411,12 +1411,10 @@ async def handle_text(message: types.Message):
             # ---------------- FIX FOR PRINCE ----------------
             role = r.iloc[0]["ROLE"]
             if r.iloc[0]["USERNAME"].lower() == "prince":
-                role = "admin"  # Force Prince to be admin
+                role = "admin"
             # -----------------------------------------------
 
             # Save logged in Telegram ID
-            ist = pytz.timezone("Asia/Kolkata")
-
             logged_in_users[uid] = {
                 "USERNAME": r.iloc[0]["USERNAME"],
                 "ROLE": role,
@@ -1443,20 +1441,11 @@ async def handle_text(message: types.Message):
             username = r.iloc[0]["USERNAME"].capitalize()
 
             if role == "admin":
-                welcome_msg = (
-                    f"👑 Welcome back, Admin {username} — command, control, excellence."
-                )
-
+                welcome_msg = f"👑 Welcome back, Admin {username} — command, control, excellence."
             elif role == "supplier":
-                welcome_msg = (
-                    f"💎 Welcome, Supplier {username} — your brilliance drives the market."
-                )
-
+                welcome_msg = f"💎 Welcome, Supplier {username} — your brilliance drives the market."
             elif role == "client":
-                welcome_msg = (
-                    f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
-                )
-
+                welcome_msg = f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
             else:
                 welcome_msg = f"Welcome, {username}."
 
@@ -1479,6 +1468,8 @@ async def handle_text(message: types.Message):
 
             # ✅ Clear login state only once
             user_state.pop(uid, None)
+            return
+
 
     # -------- BUTTON HANDLING --------
     user = get_logged_user(uid)
