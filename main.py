@@ -2191,13 +2191,17 @@ async def handle_doc(message: types.Message):
 
     await message.reply(summary_msg)
 
-# ---------------- MAIN ----------------
+# ---------------- BOT STARTER ----------------
 
-async def main():
-    print("💎 Bot is starting...")
-    load_sessions()
-    await dp.start_polling(bot)
+def start_bot():
+    import asyncio
+    import nest_asyncio
 
-# ---------------- RUN ----------------
-nest_asyncio.apply()
-asyncio.run(main())
+    nest_asyncio.apply()
+
+    async def runner():
+        print("💎 Bot is starting...")
+        load_sessions()
+        await dp.start_polling(bot)
+
+    asyncio.run(runner())
