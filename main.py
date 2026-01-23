@@ -1253,6 +1253,72 @@ async def handle_text(message: types.Message):
             await message.reply("💰 Enter your offer price ($/ct):")
             return
 
+            # ================= LOGIN FLOW (TOP PRIORITY) =================
+            if uid in user_state:
+                state = user_state[uid]
+                step = state.get("step")
+
+                if step == "login_username":
+                    user_state[uid]["username"] = text.lower()
+                    user_state[uid]["step"] = "login_password"
+                    await message.reply("🔐 Enter Password:")
+                    return
+
+                if step == "login_password":
+                    username = user_state[uid]["username"]
+                    password = text
+
+                    df = load_accounts()
+                    r = df[
+                        (df["USERNAME"] == username) &
+                        (df["PASSWORD"] == password)
+                    ]
+
+                    if r.empty:
+                        await message.reply("❌ Invalid username or password")
+                        user_state.pop(uid, None)
+                        return
+
+                    if r.iloc[0]["APPROVED"] != "YES":
+                        await message.reply("⏳ Your account is not approved yet")
+                        user_state.pop(uid, None)
+                    return
+
+                    role = r.iloc[0]["ROLE"]
+                    if username == "prince":
+                        role = "admin"
+
+                    logged_in_users[uid] = {
+                        "USERNAME": username,
+                        "ROLE": role,
+                        "SUPPLIER_KEY": f"supplier_{username}" if role == "supplier" else None,
+                    }
+
+                    save_sessions()
+                    log_activity(logged_in_users[uid], "LOGIN")
+
+                    if role == "admin":
+                        kb = admin_kb
+                    elif role == "supplier":
+                        kb = supplier_kb
+                    elif role == "client":
+                        kb = client_kb
+                    else:
+                        kb = types.ReplyKeyboardRemove()
+
+                    uname = username.capitalize()
+                    await message.reply(f"✅ Welcome {uname}", reply_markup=kb)
+
+                    notifications = fetch_unread_notifications(username, role)
+                    if notifications:
+                        note_msg = "🔔 Notifications\n\n"
+                        for n in notifications:
+                            note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
+                        await message.reply(note_msg)
+
+                    user_state.pop(uid, None)
+                    return
+
         if state.get("step") == "deal_price":
             try:
                 offer_price = float(text)
@@ -1362,7 +1428,8 @@ async def handle_text(message: types.Message):
             )
 
             user_state.pop(uid, None)
-            return
+            if not user:
+                return
 
 
         # -------- LOGIN FLOW --------
