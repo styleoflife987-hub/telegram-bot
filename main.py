@@ -1245,81 +1245,78 @@ async def handle_text(message: types.Message):
     # -------- LOGIN / CREATE FLOW --------
     if uid in user_state:
         state = user_state[uid]
+        step = state.get("step")
+
+        # ================= LOGIN FLOW (TOP PRIORITY) =================
+        if step == "login_username":
+            user_state[uid]["username"] = text.lower()
+            user_state[uid]["step"] = "login_password"
+            await message.reply("🔐 Enter Password:")
+            return
+
+        if step == "login_password":
+            username = user_state[uid]["username"]
+            password = text
+
+            df = load_accounts()
+            r = df[
+                (df["USERNAME"] == username) &
+                (df["PASSWORD"] == password)
+            ]
+
+            if r.empty:
+                await message.reply("❌ Invalid username or password")
+                user_state.pop(uid, None)
+                return
+
+            if r.iloc[0]["APPROVED"] != "YES":
+                await message.reply("⏳ Your account is not approved yet")
+                user_state.pop(uid, None)
+                return
+
+            role = r.iloc[0]["ROLE"]
+            if username == "prince":
+                role = "admin"
+
+            logged_in_users[uid] = {
+                "USERNAME": username,
+                "ROLE": role,
+                "SUPPLIER_KEY": f"supplier_{username}" if role == "supplier" else None,
+            }
+
+            save_sessions()
+            log_activity(logged_in_users[uid], "LOGIN")
+
+            if role == "admin":
+                kb = admin_kb
+            elif role == "supplier":
+                kb = supplier_kb
+            elif role == "client":
+                kb = client_kb
+            else:
+                kb = types.ReplyKeyboardRemove()
+
+            uname = username.capitalize()
+            await message.reply(f"✅ Welcome {uname}", reply_markup=kb)
+
+            notifications = fetch_unread_notifications(username, role)
+            if notifications:
+                note_msg = "🔔 Notifications\n\n"
+                for n in notifications:
+                    note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
+                await message.reply(note_msg)
+
+            user_state.pop(uid, None)
+            return
 
         # ---------- DEAL REQUEST FLOW ----------
-        if state.get("step") == "deal_stone":
+        if step == "deal_stone":
             state["stone_id"] = text
             state["step"] = "deal_price"
             await message.reply("💰 Enter your offer price ($/ct):")
             return
 
-            # ================= LOGIN FLOW (TOP PRIORITY) =================
-            if uid in user_state:
-                state = user_state[uid]
-                step = state.get("step")
-
-                if step == "login_username":
-                    user_state[uid]["username"] = text.lower()
-                    user_state[uid]["step"] = "login_password"
-                    await message.reply("🔐 Enter Password:")
-                    return
-
-                if step == "login_password":
-                    username = user_state[uid]["username"]
-                    password = text
-
-                    df = load_accounts()
-                    r = df[
-                        (df["USERNAME"] == username) &
-                        (df["PASSWORD"] == password)
-                    ]
-
-                    if r.empty:
-                        await message.reply("❌ Invalid username or password")
-                        user_state.pop(uid, None)
-                        return
-
-                    if r.iloc[0]["APPROVED"] != "YES":
-                        await message.reply("⏳ Your account is not approved yet")
-                        user_state.pop(uid, None)
-                    return
-
-                    role = r.iloc[0]["ROLE"]
-                    if username == "prince":
-                        role = "admin"
-
-                    logged_in_users[uid] = {
-                        "USERNAME": username,
-                        "ROLE": role,
-                        "SUPPLIER_KEY": f"supplier_{username}" if role == "supplier" else None,
-                    }
-
-                    save_sessions()
-                    log_activity(logged_in_users[uid], "LOGIN")
-
-                    if role == "admin":
-                        kb = admin_kb
-                    elif role == "supplier":
-                        kb = supplier_kb
-                    elif role == "client":
-                        kb = client_kb
-                    else:
-                        kb = types.ReplyKeyboardRemove()
-
-                    uname = username.capitalize()
-                    await message.reply(f"✅ Welcome {uname}", reply_markup=kb)
-
-                    notifications = fetch_unread_notifications(username, role)
-                    if notifications:
-                        note_msg = "🔔 Notifications\n\n"
-                        for n in notifications:
-                            note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
-                        await message.reply(note_msg)
-
-                    user_state.pop(uid, None)
-                    return
-
-        if state.get("step") == "deal_price":
+        if step == "deal_price":
             try:
                 offer_price = float(text)
             except:
@@ -1348,7 +1345,6 @@ async def handle_text(message: types.Message):
 
             r = row.iloc[0]
 
-            # 🔒 Prevent deal on locked stone
             if r.get("LOCKED") == "YES":
                 await message.reply("🔒 This stone is already locked in another deal.")
                 user_state.pop(uid, None)
@@ -1360,7 +1356,6 @@ async def handle_text(message: types.Message):
             if pd.isna(actual_price):
                 actual_price = 0
 
-            # Allow any offer price (lower / equal / higher)
             admin_profit_value = round(offer_price - actual_price, 2)
 
             deal = {
@@ -1368,21 +1363,17 @@ async def handle_text(message: types.Message):
                 "stone_id": stone_id,
                 "supplier_username": r["SUPPLIER"].replace("supplier_", "").lower(),
                 "client_username": user["USERNAME"],
-
                 "actual_stock_price": actual_price,
                 "client_offer_price": offer_price,
                 "admin_profit_value": admin_profit_value,
-
                 "supplier_action": "PENDING",
                 "admin_action": "PENDING",
                 "final_status": "OPEN",
-
                 "created_at": datetime.now(
                     pytz.timezone("Asia/Kolkata")
                 ).strftime("%Y-%m-%d %H:%M"),
             }
 
-           # Save deal
             s3.put_object(
                 Bucket=AWS_BUCKET,
                 Key=f"{DEALS_FOLDER}{deal_id}.json",
@@ -1390,26 +1381,18 @@ async def handle_text(message: types.Message):
                 ContentType="application/json"
             )
 
-            # 🔒 Lock stone safely
             lock_stone(stone_id)
 
-            # Notify supplier
             save_notification(
                 username=r["SUPPLIER"].replace("supplier_", "").lower(),
                 role="supplier",
                 message=(
-                     "📩 New deal offer received\n\n"
-                     f"💎 Stone ID: {stone_id}\n"
-                     f"🔷 Shape: {r.get('Shape','N/A')}\n"
-                     f"⚖️ Weight: {r.get('Weight','N/A')}\n"
-                     f"🎨 Color: {r.get('Color','N/A')}\n"
-                     f"🔍 Clarity: {r.get('Clarity','N/A')}\n\n"
-                     f"💰 Actual Price: ${actual_price} / ct\n"
-                     f"📈 Offer Price: ${offer_price} / ct"
-               )
+                    "📩 New deal offer received\n\n"
+                    f"💎 Stone ID: {stone_id}\n"
+                    f"💰 Offer Price: ${offer_price} / ct"
+                )
             )
 
-            # Log activity
             log_activity(
                 user,
                 "REQUEST_DEAL",
@@ -1418,6 +1401,16 @@ async def handle_text(message: types.Message):
                     "offer_price": offer_price
                 }
             )
+
+            await message.reply(
+                f"✅ Deal request sent successfully!\n\n"
+                f"💎 Stone ID: {stone_id}\n"
+                f"💰 Your Offer: ${offer_price} / ct\n"
+                f"⏳ Waiting for supplier response."
+            )
+
+            user_state.pop(uid, None)
+            return
 
             # Confirmation message
             await message.reply(
