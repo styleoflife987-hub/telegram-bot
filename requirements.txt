@@ -9,3 +9,4 @@ openai
 pymongo
 dnspython
 python-dotenv
+fastapi
