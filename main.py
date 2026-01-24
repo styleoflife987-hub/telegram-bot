@@ -1266,10 +1266,16 @@ async def handle_text(message: types.Message):
             password = text
 
             df = load_accounts()
+
+            # ✅ normalize for safe compare
+            df["USERNAME"] = df["USERNAME"].astype(str).str.lower().str.strip()
+            df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
+
             r = df[
-                (df["USERNAME"] == username) &
-                (df["PASSWORD"] == password)
+                (df["USERNAME"] == username.lower()) &
+                (df["PASSWORD"] == password.strip())
             ]
+
 
             if r.empty:
                 await message.reply("❌ Invalid username or password")
@@ -1293,6 +1299,8 @@ async def handle_text(message: types.Message):
 
             save_sessions()
             log_activity(logged_in_users[uid], "LOGIN")
+
+            print("✅ Logged in:", logged_in_users)
 
             if role == "admin":
                 kb = admin_kb
