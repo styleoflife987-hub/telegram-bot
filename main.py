@@ -1234,7 +1234,14 @@ async def request_deal_start(message: types.Message):
 
     user_state[message.from_user.id] = {"step": "bulk_deal_excel"}
 
+# ---------------- LOGIN BUTTON ----------------
 
+@dp.message(F.text.in_(["🔐 Login", "Login", "/login"]))
+async def start_login(message: types.Message):
+    uid = message.from_user.id
+    user_state[uid] = {"step": "login_username"}
+    await message.reply("👤 Enter Username:")
+    
 # ---------------- TEXT HANDLER ----------------
 
 @dp.message()
