@@ -1257,98 +1257,89 @@ async def handle_text(message: types.Message):
     uid = message.from_user.id
     text = message.text.strip()
 
+    # ✅ LOAD USER STATE
+    state = user_state.get(uid)
 
-        # ---- LOGIN FLOW ----
-        if state["step"] == "login_username":
-            state["username"] = message.text.strip()
-            state["step"] = "login_password"
-            await message.reply("Enter Password:")
+    # ================= LOGIN FLOW =================
+    if state and state.get("step") == "login_username":
+        state["username"] = text
+        state["step"] = "login_password"
+        await message.reply("🔑 Enter Password:")
+        return
+
+    if state and state.get("step") == "login_password":
+        df = load_accounts()
+        r = df[
+            (df["USERNAME"] == state["username"]) &
+            (df["PASSWORD"] == text)
+        ]
+
+        if r.empty:
+            await message.reply("❌ Login failed. Invalid username or password.")
+            user_state.pop(uid, None)
             return
 
-        if state["step"] == "login_password":
-            df = load_accounts()
-            r = df[(df["USERNAME"] == state["username"]) & (df["PASSWORD"] == message.text)]
-
-            if r.empty:
-                await message.reply("❌ Login failed. Invalid username or password.")
-                user_state.pop(uid)
-                return
-
-            if r.iloc[0]["APPROVED"] != "YES":
-                await message.reply("❌ Your account is not approved yet.")
-                user_state.pop(uid)
-                return
-
-            # ---------------- FIX FOR PRINCE ----------------
-            role = r.iloc[0]["ROLE"]
-            if r.iloc[0]["USERNAME"].lower() == "prince":
-                role = "admin"  # Force Prince to be admin
-            # -----------------------------------------------
-
-            # Save logged in Telegram ID
-            ist = pytz.timezone("Asia/Kolkata")
-
-            logged_in_users[uid] = {
-                "USERNAME": r.iloc[0]["USERNAME"],
-                "ROLE": role,
-                "SUPPLIER_KEY": f"supplier_{r.iloc[0]['USERNAME'].lower()}" if role == "supplier" else None,
-            }
-
-            save_sessions()
-
-            log_activity(
-                logged_in_users[uid],
-                "LOGIN"
-            )
-
-            # Assign keyboard
-            if role == "admin":
-                kb = admin_kb
-            elif role == "client":
-                kb = client_kb
-            elif role == "supplier":
-                kb = supplier_kb
-            else:
-                kb = types.ReplyKeyboardRemove()
-
-            username = r.iloc[0]["USERNAME"].capitalize()
-
-            if role == "admin":
-                welcome_msg = (
-                    f"👑 Welcome back, Admin {username} — command, control, excellence."
-                )
-
-            elif role == "supplier":
-                welcome_msg = (
-                    f"💎 Welcome, Supplier {username} — your brilliance drives the market."
-                )
-
-            elif role == "client":
-                welcome_msg = (
-                    f"🥂 Welcome, {username} — discover diamonds beyond ordinary."
-                )
-
-            else:
-                welcome_msg = f"Welcome, {username}."
-
-            await message.reply(
-                welcome_msg,
-                reply_markup=kb
-            )
-
-            # 🔔 SHOW SAVED NOTIFICATIONS
-            notifications = fetch_unread_notifications(
-                logged_in_users[uid]["USERNAME"],
-                logged_in_users[uid]["ROLE"]
-            )
-
-            if notifications:
-                note_msg = "🔔 Notifications\n\n"
-                for n in notifications:
-                    note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
-                await message.reply(note_msg)
-
+        if r.iloc[0]["APPROVED"] != "YES":
+            await message.reply("❌ Your account is not approved yet.")
             user_state.pop(uid, None)
+            return
+
+        # ---------------- ROLE FIX ----------------
+        role = r.iloc[0]["ROLE"]
+        if r.iloc[0]["USERNAME"].lower() == "prince":
+            role = "admin"
+        # ------------------------------------------
+
+        logged_in_users[uid] = {
+            "USERNAME": r.iloc[0]["USERNAME"],
+            "ROLE": role,
+            "SUPPLIER_KEY": (
+                f"supplier_{r.iloc[0]['USERNAME'].lower()}"
+                if role == "supplier" else None
+            ),
+        }
+
+        save_sessions()
+        log_activity(logged_in_users[uid], "LOGIN")
+
+        # 🎯 Assign keyboard
+        if role == "admin":
+            kb = admin_kb
+        elif role == "client":
+            kb = client_kb
+        elif role == "supplier":
+            kb = supplier_kb
+        else:
+            kb = types.ReplyKeyboardRemove()
+
+        username = r.iloc[0]["USERNAME"].capitalize()
+
+        if role == "admin":
+            welcome_msg = f"👑 Welcome Admin {username}"
+        elif role == "supplier":
+            welcome_msg = f"💎 Welcome Supplier {username}"
+        elif role == "client":
+            welcome_msg = f"🥂 Welcome {username}"
+        else:
+            welcome_msg = f"Welcome {username}"
+
+        await message.reply(welcome_msg, reply_markup=kb)
+
+        # 🔔 Notifications
+        notifications = fetch_unread_notifications(
+            logged_in_users[uid]["USERNAME"],
+            logged_in_users[uid]["ROLE"]
+        )
+
+        if notifications:
+            note_msg = "🔔 Notifications\n\n"
+            for n in notifications:
+                note_msg += f"{n['message']}\n🕒 {n['time']}\n\n"
+            await message.reply(note_msg)
+
+        # ✅ CLEAR STATE AFTER LOGIN
+        user_state.pop(uid, None)
+        return
 
 
 
