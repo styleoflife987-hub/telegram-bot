@@ -17,6 +17,7 @@ import pytz
 import uuid
 import time
 
+
 # ---------------- FASTAPI SERVER ----------------
 
 app = FastAPI()
@@ -35,8 +36,8 @@ def diamonds():
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ BOT_TOKEN environment variable not set")
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 AWS_BUCKET = os.getenv("AWS_BUCKET")
 
@@ -56,13 +57,6 @@ NOTIFICATIONS_FOLDER = "notifications/"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-import asyncio
-
-async def clear_webhook():
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("✅ Webhook cleared")
-
-asyncio.create_task(clear_webhook())
 # ---------------- AWS ----------------
 
 s3 = boto3.client(
@@ -348,16 +342,6 @@ def load_stock():
     except:
         return pd.DataFrame()
 
-def unlock_stone(stone_id):
-    df = load_stock()
-    if df.empty or "Stock #" not in df.columns:
-        return
-
-    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
-    df.to_excel("/tmp/all_suppliers_stock.xlsx", index=False)
-    s3.upload_file("/tmp/all_suppliers_stock.xlsx", AWS_BUCKET, COMBINED_STOCK_KEY)
-
-
 def remove_stone_from_supplier_and_combined(stone_id):
     # Remove from combined stock
     df = load_stock()
@@ -432,8 +416,8 @@ async def login(message: types.Message):
 
 # ---------------- ACCOUNT FLOW HANDLER ----------------
 
-# @dp.message()
-# async def account_flow_handler(message: types.Message):
+@dp.message()
+async def account_flow_handler(message: types.Message):
     uid = message.from_user.id
 
     # Ignore commands
@@ -604,7 +588,7 @@ async def smart_deals(message: types.Message):
         return
 
     # 🔒 Client only
-    if user["ROLE"] != "client":
+    if user["ROLE"].lower() != "client":
         await message.reply("❌ Smart Deals are available for clients only.")
         return
 
@@ -1140,8 +1124,8 @@ async def view_deals(message: types.Message):
                 continue
 
     # ---------------- SUPPLIER VIEW ----------------
-    if user["ROLE"] == "supplier":
-        supplier = user["USERNAME"].lower()
+    if user["ROLE"].lower() == "supplier":
+        supplier = user["USERNAME"].strip().lower()
 
         rows = [
             {
@@ -1170,7 +1154,7 @@ async def view_deals(message: types.Message):
         return
 
     # ---------------- ADMIN VIEW ----------------
-    if user["ROLE"] == "admin":
+    if user["ROLE"].lower() == "admin":
         rows = []
 
         for d in deals:
@@ -1308,8 +1292,10 @@ async def handle_text(message: types.Message):
             return
 
         # ---------------- ROLE FIX ----------------
-        role = r.iloc[0]["ROLE"]
-        if r.iloc[0]["USERNAME"].lower() == "prince":
+        role = str(r.iloc[0]["ROLE"]).strip().lower()
+        
+        # Force prince as admin (optional safety)
+        if r.iloc[0]["USERNAME"].strip().lower() == "prince":
             role = "admin"
         # ------------------------------------------
 
@@ -2109,7 +2095,7 @@ async def handle_doc(message: types.Message):
         await message.reply(f"✅ Supplier deal decisions processed successfully. ({processed} deals)")
         return   # ✅ IMPORTANT: stop further processing
 
-    if user["ROLE"] != "supplier":
+    if user["ROLE"].lower() != "supplier":
         await message.reply("❌ Only suppliers can upload diamonds")
         return
 
@@ -2245,6 +2231,8 @@ async def handle_doc(message: types.Message):
 async def startup_event():
     import asyncio
     print("🤖 Telegram Bot starting...")
+
+    load_sessions()
 
     # Clean any old webhook / conflict
     await bot.delete_webhook(drop_pending_updates=True)
