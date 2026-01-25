@@ -1267,6 +1267,7 @@ async def handle_text(message: types.Message):
         return
 
     state = user_state.get(uid)
+    print("STATE DEBUG:", state)
 
 
     # ================= LOGIN FLOW =================
