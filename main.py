@@ -1244,19 +1244,12 @@ async def request_deal_start(message: types.Message):
 
 # ---------------- LOGIN BUTTON ----------------
 
-@dp.message(F.text)
+@dp.message(F.text.in_(["🔐 login", "login", "/login"]))
 async def start_login(message: types.Message):
-    text = message.text.strip().lower()
-
-    if text not in ["🔐 login", "login", "/login"]:
-        return
-
     uid = message.from_user.id
     user_state[uid] = {"step": "login_username"}
     await message.reply("👤 Enter Username:")
-    return
 
-    
 # ---------------- TEXT HANDLER ----------------
 
 @dp.message()
