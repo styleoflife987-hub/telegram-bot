@@ -17,6 +17,20 @@ import pytz
 import uuid
 import time
 
+def safe_excel(val):
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+        return "'" + val
+    return val
+
+YES = "YES"
+NO = "NO"
+
+STATUS_PENDING = "PENDING"
+STATUS_ACCEPTED = "ACCEPTED"
+STATUS_REJECTED = "REJECTED"
+STATUS_COMPLETED = "COMPLETED"
+STATUS_CLOSED = "CLOSED"
+
 
 # ---------------- FASTAPI SERVER ----------------
 
@@ -1107,21 +1121,29 @@ async def view_deals(message: types.Message):
         await message.reply("ℹ️ User not found.")
         return
 
-    objs = s3.list_objects_v2(Bucket=AWS_BUCKET, Prefix=DEALS_FOLDER)
-    if "Contents" not in objs or not objs["Contents"]:
-        await message.reply("ℹ️ No deals available.")
-        return
+    paginator = s3.get_paginator("list_objects_v2")
+    pages = paginator.paginate(Bucket=AWS_BUCKET, Prefix=DEALS_FOLDER)
 
     deals = []
-    for obj in objs["Contents"]:
-        if obj["Key"].endswith(".json"):
+    found_any = False
+
+    for page in pages:
+        for obj in page.get("Contents", []):
+            found_any = True
+            if not obj["Key"].endswith(".json"):
+                continue
             try:
                 deal = json.loads(
                     s3.get_object(Bucket=AWS_BUCKET, Key=obj["Key"])["Body"].read()
                 )
                 deals.append(deal)
-            except:
-                continue
+            except Exception as e:
+                print("Deal load error:", e)
+
+    if not found_any:
+        await message.reply("ℹ️ No deals available.")
+        return
+
 
     # ---------------- SUPPLIER VIEW ----------------
     if user["ROLE"].lower() == "supplier":
@@ -1139,7 +1161,7 @@ async def view_deals(message: types.Message):
                 "Final Status": d.get("final_status"),
             }
             for d in deals
-            if d.get("supplier_username", "").lower() == supplier
+            if d.get("supplier_username", "").strip().lower() == supplier
         ]
 
         if not rows:
@@ -1148,9 +1170,15 @@ async def view_deals(message: types.Message):
 
         df = pd.DataFrame(rows)
         path = f"/tmp/{supplier}_deals.xlsx"
+
+        df = df.applymap(safe_excel)     # ✅ ADD THIS LINE
         df.to_excel(path, index=False)
 
         await message.reply_document(types.FSInputFile(path), caption="📊 Your Deals")
+
+        if os.path.exists(path):
+            os.remove(path)
+            
         return
 
     # ---------------- ADMIN VIEW ----------------
@@ -1181,13 +1209,20 @@ async def view_deals(message: types.Message):
 
         df = pd.DataFrame(rows)
         path = "/tmp/admin_pending_deals.xlsx"
+
+        df = df.applymap(safe_excel)     # ✅ ADD THIS LINE
         df.to_excel(path, index=False)
 
         await message.reply_document(
             types.FSInputFile(path),
             caption="📊 Pending Deals for Admin Approval"
         )
+
+        if os.path.exists(path):  
+            os.remove(path)
+            
         return
+
 
 # ---------------- START DEAL REQUEST ----------------
 
@@ -1286,7 +1321,7 @@ async def handle_text(message: types.Message):
             user_state.pop(uid, None)
             return
 
-        if r.iloc[0]["APPROVED"] != "YES":
+        if r.iloc[0]["APPROVED"] != YES:
             await message.reply("❌ Your account is not approved yet.")
             user_state.pop(uid, None)
             return
@@ -1558,13 +1593,15 @@ async def handle_text(message: types.Message):
                         try:
                             s, e = map(float, r.split("-"))
                             mask |= (df["Weight"] >= s) & (df["Weight"] <= e)
-                        except:
+                        except Exception as e:
+                            print("ERROR:", e)
                             continue
                     else:
                         try:
                             carat = float(r)
                             mask |= (df["Weight"] >= carat) & (df["Weight"] <= carat + 0.2)
-                        except:
+                        except Exception as e:
+                            print("ERROR:", e)
                             continue
                 df = df[mask]
 
@@ -1723,6 +1760,7 @@ def lock_stone(stone_id: str):
 
     df.loc[df["Stock #"] == stone_id, "LOCKED"] = "YES"
     temp = "/tmp/all_suppliers_stock.xlsx"
+    df = df.applymap(safe_excel)
     df.to_excel(temp, index=False)
     s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
 
@@ -1734,6 +1772,7 @@ def unlock_stone(stone_id: str):
 
     df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
     temp = "/tmp/all_suppliers_stock.xlsx"
+    df = df.applymap(safe_excel)
     df.to_excel(temp, index=False)
     s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
 
@@ -1764,7 +1803,7 @@ async def handle_doc(message: types.Message):
         and user_state.get(uid, {}).get("step") == "bulk_deal_excel"
     ):
         file = await bot.get_file(message.document.file_id)
-        path = f"/tmp/{message.document.file_name}"
+        path = f"/tmp/{uid}_{int(time.time())}_{message.document.file_name}"
         await bot.download_file(file.file_path, path)
 
         df = pd.read_excel(path)
@@ -1791,9 +1830,10 @@ async def handle_doc(message: types.Message):
                 continue
 
             if "LOCKED" in stock_df.columns:
-                stock_row = stock_df[
-                    (stock_df["Stock #"] == stone_id) &
-                    (stock_df["LOCKED"] != "YES")
+                fresh_stock = load_stock()
+                stock_row = fresh_stock[
+                    (fresh_stock["Stock #"] == stone_id) &
+                    (fresh_stock["LOCKED"] != "YES")
                 ]
             else:
                 stock_row = stock_df[stock_df["Stock #"] == stone_id]
@@ -1878,7 +1918,7 @@ async def handle_doc(message: types.Message):
     if user["ROLE"] == "admin" and message.document.file_name.lower().endswith(".xlsx"):
 
         file = await bot.get_file(message.document.file_id)
-        path = f"/tmp/{message.document.file_name}"
+        path = f"/tmp/{uid}_{int(time.time())}_{message.document.file_name}"
         await bot.download_file(file.file_path, path)
 
         df = pd.read_excel(path)
@@ -1926,9 +1966,8 @@ async def handle_doc(message: types.Message):
                 continue
 
             # 🚫 Prevent editing closed deals
-            if deal.get("final_status") in ["COMPLETED", "CLOSED"]:
+            if deal.get("final_status") in [STATUS_COMPLETED, STATUS_CLOSED]:
                 continue
-
 
             # ---------------- SUPPLIER ACTION ----------------
             if supplier_decision == "ACCEPT":
@@ -2004,7 +2043,7 @@ async def handle_doc(message: types.Message):
     ):
 
         file = await bot.get_file(message.document.file_id)
-        path = f"/tmp/{message.document.file_name}"
+        path = f"/tmp/{uid}_{int(time.time())}_{message.document.file_name}"
         await bot.download_file(file.file_path, path)
 
         df = pd.read_excel(path)
@@ -2047,11 +2086,11 @@ async def handle_doc(message: types.Message):
                 continue
 
             # 🔐 Only supplier who owns the deal can update
-            if deal.get("supplier_username") != user["USERNAME"].lower():
+            if deal.get("supplier_username","").strip().lower() != user["USERNAME"].strip().lower():
                 continue
 
             # 🚫 Prevent editing closed deals
-            if deal.get("final_status") in ["COMPLETED", "CLOSED"]:
+            if deal.get("final_status") in [STATUS_COMPLETED, STATUS_CLOSED]:
                 continue
 
             # ---------------- SUPPLIER DECISION ----------------
@@ -2101,7 +2140,7 @@ async def handle_doc(message: types.Message):
 
 
     file = await bot.get_file(message.document.file_id)
-    path = f"/tmp/{message.document.file_name}"
+    path = f"/tmp/{uid}_{int(time.time())}_{message.document.file_name}"
     await bot.download_file(file.file_path, path)
 
     df = pd.read_excel(path)
