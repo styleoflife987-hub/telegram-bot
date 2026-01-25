@@ -2245,3 +2245,9 @@ async def startup_event():
         app.state.bot_started = True
         asyncio.create_task(dp.start_polling(bot))
         print("✅ Bot polling started")
+
+# ---------------- RUN FASTAPI SERVER ----------------
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
