@@ -2234,8 +2234,14 @@ async def startup_event():
 
     load_sessions()
 
-    # Clean any old webhook / conflict
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Clean webhook safely
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print("Webhook cleanup failed:", e)
 
-    # Start polling safely in same event loop
-    asyncio.create_task(dp.start_polling(bot))
+    # ✅ Prevent double polling
+    if not getattr(app.state, "bot_started", False):
+        app.state.bot_started = True
+        asyncio.create_task(dp.start_polling(bot))
+        print("✅ Bot polling started")
