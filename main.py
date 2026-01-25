@@ -1244,11 +1244,18 @@ async def request_deal_start(message: types.Message):
 
 # ---------------- LOGIN BUTTON ----------------
 
-@dp.message(F.text.in_(["🔐 Login", "Login", "/login"]))
+@dp.message(F.text)
 async def start_login(message: types.Message):
+    text = message.text.strip().lower()
+
+    if text not in ["🔐 login", "login", "/login"]:
+        return
+
     uid = message.from_user.id
     user_state[uid] = {"step": "login_username"}
     await message.reply("👤 Enter Username:")
+    return
+
     
 # ---------------- TEXT HANDLER ----------------
 
@@ -1256,6 +1263,9 @@ async def start_login(message: types.Message):
 async def handle_text(message: types.Message):
     uid = message.from_user.id
     text = message.text.strip()
+
+    if text.startswith("/"):
+        return
 
     # ✅ LOAD USER STATE
     state = user_state.get(uid)
@@ -1665,7 +1675,6 @@ async def handle_text(message: types.Message):
 
             # ---------------- FORMAT OUTPUT ----------------
             shape_summary = ", ".join(
-
                 f"{k.capitalize()}:{v}" for k, v in df["Shape"].value_counts().items()
             )
 
