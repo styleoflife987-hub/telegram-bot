@@ -1270,18 +1270,14 @@ async def handle_text(message: types.Message):
     print("STATE DEBUG:", state)
 
 
+    # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_username":
         state["username"] = text.strip().lower()
         state["step"] = "login_password"
         await message.reply("🔑 Enter Password:")
         return
 
-    # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_password":
-
-        # 🔎 DEBUG (temporary)
-        print("DEBUG username entered:", state["username"])
-        print("DEBUG password entered:", text)
 
         username = state["username"].strip().lower()
         password = text.strip()
@@ -1289,9 +1285,7 @@ async def handle_text(message: types.Message):
         df = load_accounts()
         df.columns = df.columns.str.strip()
 
-        print("DEBUG ACCOUNTS DATAFRAME:")
-        print(df)
-
+        # normalize excel values
         df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
         df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
         df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
@@ -1308,9 +1302,11 @@ async def handle_text(message: types.Message):
             user_state.pop(uid, None)
             return
 
-        await message.reply("✅ Login successful!")
+        # ✅ LOGIN SUCCESS
+        await message.reply("✅ Login successful! Welcome 🎉")
         user_state.pop(uid, None)
         return
+
 
 
         logged_in_users[uid] = {
