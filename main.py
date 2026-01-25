@@ -1266,6 +1266,8 @@ async def handle_text(message: types.Message):
     if text.startswith("/"):
         return
 
+    state = user_state.get(uid)
+
 
     # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_username":
