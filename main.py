@@ -1272,7 +1272,7 @@ async def handle_text(message: types.Message):
 
     # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_username":
-        state["username"] = text
+        state["username"] = text.strip().lower()
         state["step"] = "login_password"
         await message.reply("🔑 Enter Password:")
         return
@@ -1281,7 +1281,7 @@ async def handle_text(message: types.Message):
         df = load_accounts()
         r = df[
             (df["USERNAME"] == state["username"]) &
-            (df["PASSWORD"] == text)
+            (df["PASSWORD"].astype(str).str.strip() == text.strip())
         ]
 
         if r.empty:
