@@ -1269,7 +1269,6 @@ async def handle_text(message: types.Message):
     state = user_state.get(uid)
     print("STATE DEBUG:", state)
 
-
     # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_username":
         state["username"] = text.strip().lower()
@@ -1278,19 +1277,18 @@ async def handle_text(message: types.Message):
         return
 
     if state and state.get("step") == "login_password":
-
+        df = load_accounts()
         username = state["username"].strip().lower()
         password = text.strip()
 
-        df = load_accounts()
-        df.columns = df.columns.str.strip()
-
-        # normalize excel values
         df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
         df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
-        df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
 
-        r = df[(df["USERNAME"] == username) & (df["PASSWORD"] == password)]
+        r = df[
+            (df["USERNAME"] == username) &
+            (df["PASSWORD"] == password)
+        ]
+
 
         if r.empty:
             await message.reply("❌ Login failed. Invalid username or password.")
@@ -1302,11 +1300,11 @@ async def handle_text(message: types.Message):
             user_state.pop(uid, None)
             return
 
-        # ✅ LOGIN SUCCESS
-        await message.reply("✅ Login successful! Welcome 🎉")
-        user_state.pop(uid, None)
-        return
-
+        # ---------------- ROLE FIX ----------------
+        role = r.iloc[0]["ROLE"]
+        if r.iloc[0]["USERNAME"].lower() == "prince":
+            role = "admin"
+        # ------------------------------------------
 
 
         logged_in_users[uid] = {
