@@ -1373,6 +1373,7 @@ async def start_login(message: types.Message):
 
     user_state[uid] = {"step": "login_username"}
     await message.reply("👤 Enter Username:")
+    return
 
 # ---------------- TEXT HANDLER ----------------
 
@@ -1387,9 +1388,8 @@ async def handle_text(message: types.Message):
     text = message.text.strip()
 
     # 🚫 Ignore commands so they don't break state flow
-    if text.startswith("/"):
+    if text.startswith("/") and not state:
         return
-
     state = user_state.get(uid)
     print("STATE DEBUG:", state)
 
@@ -1402,11 +1402,13 @@ async def handle_text(message: types.Message):
 
     # ================= LOGIN FLOW =================
     if state and state.get("step") == "login_username":
-        user_state[uid]["login_username"] = text.lower()
-        user_state[uid]["step"] = "login_password"
+        user_state[uid] = {
+            "step": "login_password",
+            "login_username": text.strip()
+        }
         await message.reply("🔐 Enter Password:")
         return
-
+        
     if state and state.get("step") == "login_password":
         username = user_state[uid].get("login_username")
         password = text
