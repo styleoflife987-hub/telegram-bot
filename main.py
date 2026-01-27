@@ -1393,27 +1393,53 @@ async def handle_text(message: types.Message):
     state = user_state.get(uid)
     print("STATE DEBUG:", state)
 
+    
+
+    # ================= LOGIN FLOW =================
+    if state and state.get("step") == "login_username":
+        user_state[uid]["login_username"] = text.lower()
+        user_state[uid]["step"] = "login_password"
+        await message.reply("🔐 Enter Password:")
+        return
+
+    if state and state.get("step") == "login_password":
+        username = user_state[uid].get("login_username")
+        password = text
+
+        df = load_accounts()
+
+        r = df[
+            (df["USERNAME"].str.lower() == username.lower()) &
+            (df["PASSWORD"] == password) &
+            (df["APPROVED"] == "YES")
+        ]
+
+        if r.empty:
+            await message.reply("❌ Invalid username / password or not approved.")
+            user_state.pop(uid, None)
+            return
+
         # ---------------- ROLE FIX ----------------
         role = str(r.iloc[0]["ROLE"]).strip().lower()
-        
-        # Force prince as admin (optional safety)
+
         ADMIN_USERS = [
-            u.strip() for u in os.getenv("ADMIN_USERS", "").lower().split(",") if u.strip()
+            u.strip()
+            for u in os.getenv("ADMIN_USERS", "").lower().split(",")
+            if u.strip()
         ]
 
         if r.iloc[0]["USERNAME"].strip().lower() in ADMIN_USERS:
             role = "admin"
         # ------------------------------------------
 
-
         logged_in_users[uid] = {
             "USERNAME": r.iloc[0]["USERNAME"],
-            "last_active": time.time(),
             "ROLE": role,
             "SUPPLIER_KEY": (
                 f"supplier_{r.iloc[0]['USERNAME'].lower()}"
                 if role == "supplier" else None
             ),
+            "last_active": time.time(),
         }
 
         save_sessions()
@@ -1429,16 +1455,16 @@ async def handle_text(message: types.Message):
         else:
             kb = types.ReplyKeyboardRemove()
 
-        username = r.iloc[0]["USERNAME"].capitalize()
+        username_disp = r.iloc[0]["USERNAME"].capitalize()
 
         if role == "admin":
-            welcome_msg = f"👑 Welcome Admin {username}"
+            welcome_msg = f"👑 Welcome Admin {username_disp}"
         elif role == "supplier":
-            welcome_msg = f"💎 Welcome Supplier {username}"
+            welcome_msg = f"💎 Welcome Supplier {username_disp}"
         elif role == "client":
-            welcome_msg = f"🥂 Welcome {username}"
+            welcome_msg = f"🥂 Welcome {username_disp}"
         else:
-            welcome_msg = f"Welcome {username}"
+            welcome_msg = f"Welcome {username_disp}"
 
         await message.reply(welcome_msg, reply_markup=kb)
 
@@ -1457,6 +1483,7 @@ async def handle_text(message: types.Message):
         # ✅ CLEAR STATE AFTER LOGIN
         user_state.pop(uid, None)
         return
+
 
     # ================= DEAL REQUEST FLOW =================
     if state and state.get("step") in ["deal_stone", "deal_price"]:
