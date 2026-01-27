@@ -1283,6 +1283,12 @@ async def request_deal_start(message: types.Message):
 @dp.message(F.text.in_(["🔐 login", "login", "/login"]))
 async def start_login(message: types.Message):
     uid = message.from_user.id
+
+    # ✅ If already in login flow, do not reset
+    if uid in user_state and user_state[uid].get("step") in ["login_username", "login_password"]:
+        await message.reply("⚠️ Login already in progress. Please enter username or password.")
+        return
+
     user_state[uid] = {"step": "login_username"}
     await message.reply("👤 Enter Username:")
 
