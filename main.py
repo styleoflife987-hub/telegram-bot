@@ -1427,11 +1427,14 @@ async def handle_text(message: types.Message):
 
         df = load_accounts()
 
+        df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
+
         r = df[
-            (df["USERNAME"].str.lower() == username.lower()) &
-            (df["PASSWORD"] == password) &
+            (df["USERNAME"].astype(str).str.strip().str.lower() == username.strip().lower()) &
+            (df["PASSWORD"].astype(str).str.strip() == password.strip()) &
             (df["APPROVED"] == "YES")
         ]
+
 
         if r.empty:
             await message.reply("❌ Invalid username / password or not approved.")
