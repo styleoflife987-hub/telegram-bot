@@ -1393,38 +1393,6 @@ async def handle_text(message: types.Message):
     state = user_state.get(uid)
     print("STATE DEBUG:", state)
 
-    # ================= LOGIN FLOW =================
-    if state and state.get("step") == "login_username":
-        state["username"] = text.strip().lower()
-        state["step"] = "login_password"
-        await message.reply("🔑 Enter Password:")
-        return
-
-    if state and state.get("step") == "login_password":
-        df = load_accounts()
-        username = state["username"].strip().lower()
-        password = hashlib.sha256(text.strip().encode()).hexdigest()
-
-        df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
-        df = df.dropna(subset=["USERNAME", "PASSWORD"])
-        df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
-
-        r = df[
-            (df["USERNAME"] == username) &
-            (df["PASSWORD"] == password)
-        ]
-
-
-        if r.empty:
-            await message.reply("❌ Login failed. Invalid username or password.")
-            user_state.pop(uid, None)
-            return
-
-        if str(r.iloc[0]["APPROVED"]).strip().upper() != "YES":
-            await message.reply("❌ Your account is not approved yet.")
-            user_state.pop(uid, None)
-            return
-
         # ---------------- ROLE FIX ----------------
         role = str(r.iloc[0]["ROLE"]).strip().lower()
         
