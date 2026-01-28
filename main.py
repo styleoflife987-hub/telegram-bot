@@ -1442,12 +1442,21 @@ async def handle_text(message: types.Message):
 
         # ✅ Normalize columns safely
         df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
-        df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
-        df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
-        df["ROLE"] = df["ROLE"].astype(str).str.strip()
 
-        username_clean = username.strip().lower()
-        password_clean = password.strip()
+        # 🔥 IMPORTANT FIX — remove .0 from numeric passwords
+        df["PASSWORD"] = (
+            df["PASSWORD"]
+            .astype(str)
+            .str.replace(".0", "", regex=False)
+            .str.strip()
+        )
+
+        df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
+        df["ROLE"] = df["ROLE"].astype(str).str.strip().str.lower()
+
+
+        username_clean = str(username).strip().lower()
+        password_clean = str(password).strip().replace(".0", "")
 
         r = df[
             (df["USERNAME"] == username_clean) &
