@@ -1696,6 +1696,7 @@ async def handle_text(message: types.Message):
             "Stock Status": ["Available", "Reserved", "Sold"],
             "Contact Number": ["1234567890", "0987654321", "1122334455"],
             "Diamond Type": ["Natural", "LGD", "HPHT"]
+            "Description": ["Nice stone", "Premium quality", "Best cut"]
         })
         buffer = BytesIO()
         df.to_excel(buffer, index=False)
@@ -2464,7 +2465,7 @@ async def handle_doc(message: types.Message):
         await message.reply("❌ Invalid shape format")
         return
 
-    mandatory_cols = ["Shape", "Color", "Clarity", "Weight", "Contact Number", "Diamond Type"]
+    mandatory_cols = ["Shape", "Color", "Clarity", "Weight", "Contact Number", "Diamond Type", "Description"]
     missing_cols = [c for c in mandatory_cols if c not in df.columns]
     if missing_cols:
         await message.reply(f"❌ Missing mandatory columns: {', '.join(missing_cols)}")
