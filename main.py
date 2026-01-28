@@ -296,6 +296,7 @@ def save_accounts(df):
 SESSION_KEY = "sessions/logged_in_users.json"
 
 logged_in_users = {}
+login_attempts = {}
 user_state = {}
 
 SESSION_TIMEOUT = 3600  # 1 hour
@@ -407,6 +408,23 @@ def remove_stone_from_supplier_and_combined(stone_id):
             sdf.to_excel(local, index=False)
             s3.upload_file(local, AWS_BUCKET, key)
             break
+
+def unlock_stone(stone_id):
+    df = load_stock()
+    if df.empty:
+        return
+
+    if "Stock #" not in df.columns or "LOCKED" not in df.columns:
+        return
+
+    df.loc[df["Stock #"] == stone_id, "LOCKED"] = "NO"
+
+    temp = "/tmp/all_suppliers_stock.xlsx"
+    for col in df.select_dtypes(include="object"):
+        df[col] = df[col].map(safe_excel)
+
+    df.to_excel(temp, index=False)
+    s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
 # ---------------- STATE ----------------
 
 def save_sessions():
@@ -425,6 +443,21 @@ def load_sessions():
         logged_in_users = {int(k): v for k, v in raw.items()}
     except:
         logged_in_users = {}
+
+def cleanup_sessions(timeout=60*60):  # 1 hour inactivity
+    now = time.time()
+    expired = []
+
+    for uid, data in logged_in_users.items():
+        if now - data.get("last_active", now) > timeout:
+            expired.append(uid)
+
+    for uid in expired:
+        print("🧹 Auto logout user:", uid)
+        logged_in_users.pop(uid, None)
+
+    if expired:
+        save_sessions()
 
 # ---------------- START ----------------
 
@@ -556,9 +589,21 @@ async def account_flow_handler(message: types.Message):
         username = user_state[uid].get("login_username")
         password = text
 
+        df = load_accounts()
+
+        row = df[
+            (df["USERNAME"].astype(str).str.strip().str.lower() == username) &
+            (df["PASSWORD"].astype(str).str.strip() == password) &
+            (df["APPROVED"].astype(str).str.strip().str.upper() == "YES")
+        ]
+
+        if row.empty:
+            await message.reply("❌ Invalid login or not approved by admin.")
+            user_state.pop(uid, None)
+            return
+
         user = row.iloc[0].to_dict()
 
-        # ✅ Save session
         logged_in_users[uid] = {
             **user,
             "last_active": time.time()
@@ -567,7 +612,6 @@ async def account_flow_handler(message: types.Message):
 
         user_state.pop(uid, None)
 
-        # 🎯 Keyboard based on role
         role = user["ROLE"].lower()
         if role == "admin":
             kb = admin_kb
@@ -583,7 +627,6 @@ async def account_flow_handler(message: types.Message):
 
         log_activity(user, "LOGIN")
         return
-
 
 # ---------------- LOGOUT ----------------
 
@@ -1364,6 +1407,9 @@ async def request_deal_start(message: types.Message):
 
     out = "/tmp/request_deal_bulk.xlsx"
 
+    for col in bulk_df.select_dtypes(include="object"):
+        bulk_df[col] = bulk_df[col].map(safe_excel)
+
     bulk_df.to_excel(out, index=False)
 
     await message.reply_document(
@@ -1476,6 +1522,16 @@ async def handle_text(message: types.Message):
         print("LOGIN MATCH ROWS:", len(r))
 
         if r.empty:
+
+            attempts = login_attempts.get(uid, {"count": 0, "time": time.time()})
+            attempts["count"] += 1
+            attempts["time"] = time.time()
+            login_attempts[uid] = attempts
+
+            if attempts["count"] >= 5:
+                await message.reply("🚫 Too many failed attempts. Try again after 10 minutes.")
+                return
+
             await message.reply("❌ Invalid username / password or not approved.")
             user_state.pop(uid, None)
             return
@@ -2139,7 +2195,8 @@ async def handle_doc(message: types.Message):
                 continue
             
             # 🔒 Lock stone safely
-            if not lock_stone(stone_id):
+            if not locked:
+                print("⚠️ Lock failed for stone:", stone_id)
                 continue
 
             s3.put_object(
@@ -2277,7 +2334,9 @@ async def handle_doc(message: types.Message):
                 deal["supplier_action"] = "REJECTED"
                 deal["admin_action"] = "REJECTED"
                 deal["final_status"] = "CLOSED"
-                unlock_stone(deal["stone_id"])
+
+                if "stone_id" in deal:
+                    unlock_stone(deal["stone_id"])
 
 
             # ---------------- ADMIN ACTION ----------------
@@ -2307,18 +2366,12 @@ async def handle_doc(message: types.Message):
                 deal["final_status"] = "CLOSED"
 
                 # 🔓 Unlock stone
-                unlock_stone(deal["stone_id"])
+                if "stone_id" in deal:
+                    unlock_stone(deal["stone_id"])
 
                 save_notification(
                     deal["client_username"],
                     "client",
-                    f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
-                )
-
-
-                save_notification(
-                    deal["supplier_username"],
-                    "supplier",
                     f"❌ Deal rejected by admin for Stone {deal['stone_id']}"
                 )
 
@@ -2419,7 +2472,8 @@ async def handle_doc(message: types.Message):
                 deal["final_status"] = "CLOSED"
 
                 # 🔓 Unlock stone
-                unlock_stone(deal["stone_id"])
+                if "stone_id" in deal:
+                    unlock_stone(deal["stone_id"])
 
                 save_notification(
                     deal["client_username"],
@@ -2477,6 +2531,13 @@ async def handle_doc(message: types.Message):
         await message.reply("❌ Stock # cannot be empty")
         return
 
+    if df["Stock #"].duplicated().any():
+        duplicates = df[df["Stock #"].duplicated()]["Stock #"].astype(str).unique()
+        await message.reply(
+            "❌ Duplicate Stock # found:\n" + ", ".join(duplicates)
+        )
+        return
+
 
     # ---------- DATA VALIDATION ----------
     df["Weight"] = pd.to_numeric(df["Weight"], errors="coerce")
@@ -2513,6 +2574,16 @@ async def handle_doc(message: types.Message):
     df["SUPPLIER"] = supplier_key_name
 
     existing = load_stock()
+
+    # 🚫 Block duplicate Stock #
+    if not existing.empty and "Stock #" in existing.columns:
+        duplicate = set(df["Stock #"]) & set(existing["Stock #"])
+        if duplicate:
+            await message.reply(
+                f"❌ Duplicate Stock # found already in system:\n{', '.join(duplicate)}"
+            )
+            return
+
     if "LOCKED" not in df.columns:
         df["LOCKED"] = "NO"
 
@@ -2584,6 +2655,14 @@ async def handle_doc(message: types.Message):
     if os.path.exists(local_path):
         os.remove(local_path)
 
+async def session_cleanup_loop():
+    while True:
+        try:
+            cleanup_sessions()
+        except Exception as e:
+            print("Session cleanup error:", e)
+        await asyncio.sleep(600)  # every 10 minutes
+
 # ---------------- START BOT ON SERVER START ----------------
 
 @app.on_event("startup")
@@ -2602,6 +2681,8 @@ async def startup_event():
     if not hasattr(startup_event, "started"):
         startup_event.started = True
         asyncio.create_task(dp.start_polling(bot))
+        asyncio.create_task(session_cleanup_loop())
+        asyncio.create_task(session_cleanup_loop())
         print("✅ Bot polling started")
     else:
         print("⚠️ Bot already running — skipping duplicate polling")
