@@ -1400,11 +1400,6 @@ async def handle_text(message: types.Message):
     if text.startswith("/") and not state:
         return
 
-    # ✅ LOGIN FLOW MUST RUN FIRST
-    if state and state.get("step") in ["login_username", "login_password"]:
-        pass
-    print("STATE DEBUG:", state)
-
     # 🔄 Update last activity for logged-in users
     if uid in logged_in_users:
         logged_in_users[uid]["last_active"] = time.time()
@@ -1924,6 +1919,37 @@ async def handle_text(message: types.Message):
             user_state.pop(uid)
             return
 
+def load_accounts():
+    try:
+        s3.download_file(AWS_BUCKET, ACCOUNTS_KEY, "/tmp/accounts.xlsx")
+        df = pd.read_excel("/tmp/accounts.xlsx", dtype=str)
+
+        required = ["USERNAME", "PASSWORD", "ROLE", "APPROVED"]
+        for col in required:
+            if col not in df.columns:
+                raise Exception(f"Missing column: {col}")
+
+            df[col] = (
+                df[col]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+
+        # ✅ Normalize
+        df["USERNAME"] = df["USERNAME"].str.lower()
+        df["APPROVED"] = df["APPROVED"].str.upper()
+        df["ROLE"] = df["ROLE"].str.lower()
+
+        print("✅ ACCOUNTS LOADED:")
+        print(df.head(10))
+
+        return df
+
+    except Exception as e:
+        print("❌ LOAD ACCOUNT ERROR:", e)
+        return pd.DataFrame(columns=["USERNAME","PASSWORD","ROLE","APPROVED"])
+
 # ---------------- SAFE STOCK LOCK ----------------
 
 def lock_stone(stone_id: str) -> bool:
@@ -2035,7 +2061,16 @@ async def handle_doc(message: types.Message):
             except:
                 continue
 
+            stock_row = latest_df_cache[
+                (latest_df_cache["Stock #"] == stone_id) &
+                (latest_df_cache["LOCKED"] != "YES")
+            ]
+
+            if stock_row.empty:
+                continue
+
             r = stock_row.iloc[0]
+
             actual_price = pd.to_numeric(
                 r.get("Price Per Carat", 0),
                 errors="coerce"
@@ -2527,17 +2562,18 @@ async def startup_event():
 
     load_sessions()
 
-    # Clean webhook safely
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         print("Webhook cleanup failed:", e)
 
-    # ✅ Prevent double polling
-    if not getattr(app.state, "bot_started", False):
-        app.state.bot_started = True
+    # ✅ HARD LOCK — prevent duplicate polling
+    if not hasattr(startup_event, "started"):
+        startup_event.started = True
         asyncio.create_task(dp.start_polling(bot))
         print("✅ Bot polling started")
+    else:
+        print("⚠️ Bot already running — skipping duplicate polling")
 
 # ---------------- RUN FASTAPI SERVER ----------------
 
