@@ -446,13 +446,14 @@ async def create_account(message: types.Message):
 async def login(message: types.Message):
     uid = message.from_user.id
 
-    # ✅ Prevent restarting login if already in flow
+    # ✅ If already in login flow → reset and restart
     if uid in user_state and user_state[uid].get("step") in ["login_username", "login_password"]:
-        await message.reply("⚠️ Login already in progress. Please enter username or password.")
-        return
+        user_state.pop(uid, None)
+        await message.reply("🔄 Previous login cancelled. Starting new login...")
 
     user_state[uid] = {"step": "login_username"}
     await message.reply("👤 Enter Username:")
+    return
 
 
 # ---------------- ACCOUNT FLOW HANDLER ----------------
