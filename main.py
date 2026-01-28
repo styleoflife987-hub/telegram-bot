@@ -1427,14 +1427,28 @@ async def handle_text(message: types.Message):
 
         df = load_accounts()
 
+        print("===== LOGIN DEBUG =====")
+        print("INPUT USERNAME:", username)
+        print("INPUT PASSWORD:", password)
+        print(df[["USERNAME", "PASSWORD", "APPROVED", "ROLE"]].head(20))
+        print("=======================")
+
+        # ✅ Normalize columns safely
+        df["USERNAME"] = df["USERNAME"].astype(str).str.strip().str.lower()
+        df["PASSWORD"] = df["PASSWORD"].astype(str).str.strip()
         df["APPROVED"] = df["APPROVED"].astype(str).str.strip().str.upper()
+        df["ROLE"] = df["ROLE"].astype(str).str.strip()
+
+        username_clean = username.strip().lower()
+        password_clean = password.strip()
 
         r = df[
-            (df["USERNAME"].astype(str).str.strip().str.lower() == username.strip().lower()) &
-            (df["PASSWORD"].astype(str).str.strip() == password.strip()) &
+            (df["USERNAME"] == username_clean) &
+            (df["PASSWORD"] == password_clean) &
             (df["APPROVED"] == "YES")
         ]
 
+        print("LOGIN MATCH ROWS:", len(r))
 
         if r.empty:
             await message.reply("❌ Invalid username / password or not approved.")
