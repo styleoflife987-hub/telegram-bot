@@ -526,22 +526,34 @@ async def account_flow_handler(message: types.Message):
         await message.reply("🔐 Enter Password:")
         return
 
-
-    if step == "login_password":
-        username = user_state[uid].get("login_username")
-        password = text
-
         df = load_accounts()
+
+        username_clean = str(username).strip().lower()
+        password_clean = str(password).strip()
+
+        print("🔍 USER INPUT:", username_clean, password_clean)
+        print("📄 DATAFRAME:")
+        print(df)
+
         row = df[
-            (df["USERNAME"] == username) &
-            (df["PASSWORD"] == password) &
-            (df["APPROVED"] == "YES")
+            (df["USERNAME"].astype(str).str.strip().str.lower() == username_clean) &
+            (df["PASSWORD"].astype(str).str.strip() == password_clean) &
+            (df["APPROVED"].astype(str).str.strip().str.upper() == "YES")
         ]
+
+        print("✅ LOGIN MATCH ROWS:", len(row))
+        print(row)
 
         if row.empty:
             await message.reply("❌ Invalid login or not approved by admin.")
             user_state.pop(uid, None)
             return
+
+
+
+    if step == "login_password":
+        username = user_state[uid].get("login_username")
+        password = text
 
         user = row.iloc[0].to_dict()
 
