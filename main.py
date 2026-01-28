@@ -1695,7 +1695,7 @@ async def handle_text(message: types.Message):
             "Image": ["img1.jpg", "img2.jpg", "img3.jpg"],
             "Stock Status": ["Available", "Reserved", "Sold"],
             "Contact Number": ["1234567890", "0987654321", "1122334455"],
-            "Diamond Type": ["Natural", "LGD", "HPHT"]
+            "Diamond Type": ["Natural", "LGD", "HPHT"],
             "Description": ["Nice stone", "Premium quality", "Best cut"]
         })
         buffer = BytesIO()
