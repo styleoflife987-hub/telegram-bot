@@ -1546,8 +1546,8 @@ async def handle_text(message: types.Message):
 
         r = df[
             (df["USERNAME"].str.strip().str.lower() == username_clean) &
-            (df["PASSWORD"].astype(str).str.strip() == password_clean) &
-            (df["APPROVED"].str.strip().str.upper() == "YES")
+            (df["PASSWORD"].astype(str).str.replace(".0","",regex=False).str.strip() == password_clean) &
+            (df["APPROVED"].astype(str).str.strip().str.upper() == "YES")
         ]
         print("LOGIN MATCH ROWS:", len(r))
 
@@ -2068,6 +2068,21 @@ def lock_stone(stone_id: str) -> bool:
     df = load_stock()
     if df.empty:
         return False
+
+    mask = (df["Stock #"] == stone_id) & (df["LOCKED"] != "YES")
+
+    if not mask.any():
+        return False   # already locked
+
+    df.loc[mask, "LOCKED"] = "YES"
+
+    temp = "/tmp/all_suppliers_stock.xlsx"
+    for col in df.select_dtypes(include="object"):
+        df[col] = df[col].map(safe_excel)
+
+    df.to_excel(temp, index=False)
+    s3.upload_file(temp, AWS_BUCKET, COMBINED_STOCK_KEY)
+    return True
 
 def safe_upload_to_s3(local_path, bucket, key, retries=3):
     for attempt in range(1, retries + 1):
@@ -2728,13 +2743,3 @@ async def startup_event():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
-async def main():
-    load_sessions()
-    asyncio.create_task(session_cleanup_loop())
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    nest_asyncio.apply()
-    asyncio.run(main())
