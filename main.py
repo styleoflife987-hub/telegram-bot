@@ -1541,11 +1541,10 @@ async def handle_text(message: types.Message):
         password_clean = str(password).strip().replace(".0", "")
 
         r = df[
-            (df["USERNAME"] == username_clean) &
-            (df["PASSWORD"] == password_clean) &
-            (df["APPROVED"] == "YES")
+            (df["USERNAME"].str.strip().str.lower() == username_clean) &
+            (df["PASSWORD"].astype(str).str.strip() == password_clean) &
+            (df["APPROVED"].str.strip().str.upper() == "YES")
         ]
-
         print("LOGIN MATCH ROWS:", len(r))
 
         if r.empty:
@@ -2049,11 +2048,6 @@ def load_accounts():
                 .astype(str)
                 .str.strip()
             )
-
-        # ✅ Normalize
-        df["USERNAME"] = df["USERNAME"].str.lower()
-        df["APPROVED"] = df["APPROVED"].str.upper()
-        df["ROLE"] = df["ROLE"].str.lower()
 
         print("✅ ACCOUNTS LOADED:")
         print(df.head(10))
