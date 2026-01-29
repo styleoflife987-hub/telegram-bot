@@ -2730,13 +2730,17 @@ async def startup_event():
     except Exception as e:
         print("Webhook cleanup failed:", e)
 
-    # ✅ HARD LOCK — prevent duplicate polling
+    # ✅ Start polling
+    asyncio.create_task(dp.start_polling(bot))
+
+    # ✅ Session cleanup loop
     if not hasattr(startup_event, "started"):
         startup_event.started = True
         asyncio.create_task(session_cleanup_loop())
         print("✅ Bot polling started")
     else:
         print("⚠️ Bot already running — skipping duplicate polling")
+
 
 # ---------------- RUN FASTAPI SERVER ----------------
 
