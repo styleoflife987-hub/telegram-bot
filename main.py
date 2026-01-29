@@ -297,6 +297,7 @@ SESSION_KEY = "sessions/logged_in_users.json"
 
 logged_in_users = {}
 login_attempts = {}
+user_rate_limit = {}
 user_state = {}
 
 SESSION_TIMEOUT = 3600  # 1 hour
@@ -376,6 +377,16 @@ def load_stock():
     except:
         return pd.DataFrame()
 
+def audit_log(user, action, details=""):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"{ts},{user},{action},{details}\n"
+
+    with open("/tmp/audit_log.csv", "a", encoding="utf-8") as f:
+        f.write(line)
+
+    safe_upload_to_s3("/tmp/audit_log.csv", BUCKET, "audit_log.csv")
+
+
 def remove_stone_from_supplier_and_combined(stone_id):
     # Remove from combined stock
     df = load_stock()
@@ -447,6 +458,16 @@ def load_sessions():
 def cleanup_sessions(timeout=60*60):  # 1 hour inactivity
     now = time.time()
     expired = []
+
+def is_rate_limited(uid, limit=5, window=10):
+    now = time.time()
+    history = user_rate_limit.get(uid, [])
+
+    history = [t for t in history if now - t < window]
+    history.append(now)
+
+    user_rate_limit[uid] = history
+    return len(history) > limit
 
     for uid, data in logged_in_users.items():
         if now - data.get("last_active", now) > timeout:
@@ -1455,6 +1476,11 @@ async def start_login(message: types.Message):
 @dp.message()
 async def handle_text(message: types.Message):
     uid = message.from_user.id
+    
+    # 🚦 Rate limit protection
+    if is_rate_limited(uid):
+        await message.reply("⏳ Too many messages. Please slow down.")
+        return
 
     # ✅ Safety: ignore non-text messages
     if not message.text:
@@ -2044,6 +2070,19 @@ def lock_stone(stone_id: str) -> bool:
     if df.empty:
         return False
 
+def safe_upload_to_s3(local_path, bucket, key, retries=3):
+    for attempt in range(1, retries + 1):
+        try:
+            s3.upload_file(local_path, bucket, key)
+            print(f"✅ Upload success: {key}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Upload failed attempt {attempt}: {e}")
+            time.sleep(2 * attempt)
+
+    print("❌ Upload permanently failed:", key)
+    return False
+
     mask = (df["Stock #"] == stone_id) & (df["LOCKED"] != "YES")
 
     if not mask.any():
@@ -2195,10 +2234,10 @@ async def handle_doc(message: types.Message):
                 continue
             
             # 🔒 Lock stone safely
+            locked = lock_stone(stone_id)
             if not locked:
                 print("⚠️ Lock failed for stone:", stone_id)
                 continue
-
             s3.put_object(
                 Bucket=AWS_BUCKET,
                 Key=f"{DEALS_FOLDER}{deal_id}.json",
@@ -2681,7 +2720,6 @@ async def startup_event():
     if not hasattr(startup_event, "started"):
         startup_event.started = True
         asyncio.create_task(dp.start_polling(bot))
-        asyncio.create_task(session_cleanup_loop())
         asyncio.create_task(session_cleanup_loop())
         print("✅ Bot polling started")
     else:
