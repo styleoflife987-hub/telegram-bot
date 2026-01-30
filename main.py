@@ -1547,18 +1547,36 @@ async def handle_text(message: types.Message):
                 return ""
             x = str(x)
             x = unicodedata.normalize("NFKC", x)
-            x = x.replace("\n", "").replace("\r", "").replace("\u00A0", " ")
+            x = x.replace("\n", "").replace("\r", "").replace("\u00A0", "")
             return x.strip()
 
-        # ✅ Clean dataframe once only
+        def clean_password(x):
+            x = normalize_text(x)
+            if x.endswith(".0"):   # Excel numeric password fix
+                x = x[:-2]
+            return x
+
+        # ---------------- CLEAN DATAFRAME ----------------
         df["USERNAME"] = df["USERNAME"].apply(normalize_text).str.lower()
-        df["PASSWORD"] = df["PASSWORD"].apply(normalize_text).str.replace(".0", "", regex=False)
+        df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
         df["APPROVED"] = df["APPROVED"].apply(normalize_text).str.upper()
         df["ROLE"] = df["ROLE"].apply(normalize_text).str.lower()
 
-        # ✅ Clean input
+        # ---------------- CLEAN INPUT ----------------
         username_clean = normalize_text(username).lower()
-        password_clean = normalize_text(password).replace(".0", "")
+        password_clean = clean_password(password)
+
+        # 🔍 DEBUG (keep for now)
+        print("LOGIN INPUT :", username_clean, password_clean)
+        print(df[["USERNAME", "PASSWORD", "APPROVED"]].head(10))
+
+        # ---------------- MATCH LOGIN ----------------
+        r = df[
+            (df["USERNAME"] == username_clean) &
+            (df["PASSWORD"] == password_clean) &
+            (df["APPROVED"] == "YES")
+        ]
+
 
         r = df[
             (df["USERNAME"] == username_clean) &
