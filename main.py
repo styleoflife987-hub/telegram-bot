@@ -1560,20 +1560,6 @@ async def handle_text(message: types.Message):
         print(df[["USERNAME", "PASSWORD", "APPROVED", "ROLE"]].head(20))
         print("=======================")
 
-        def normalize_text(x):
-            if x is None:
-                return ""
-            x = str(x)
-            x = unicodedata.normalize("NFKC", x)
-            x = x.replace("\n", "").replace("\r", "").replace("\u00A0", "")
-            return x.strip()
-
-        def clean_password(x):
-            x = normalize_text(x)
-            if x.endswith(".0"):   # Excel numeric password fix
-                x = x[:-2]
-            return x
-
         # ---------------- CLEAN DATAFRAME ----------------
         df["USERNAME"] = df["USERNAME"].apply(normalize_text).str.lower()
         df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
@@ -1584,10 +1570,6 @@ async def handle_text(message: types.Message):
         username_clean = normalize_text(username).lower()
         password_clean = clean_password(password)
 
-        # 🔍 DEBUG (keep for now)
-        print("LOGIN INPUT :", username_clean, password_clean)
-        print(df[["USERNAME", "PASSWORD", "APPROVED"]].head(10))
-
         # ---------------- MATCH LOGIN ----------------
         r = df[
             (df["USERNAME"] == username_clean) &
@@ -1595,27 +1577,13 @@ async def handle_text(message: types.Message):
             (df["APPROVED"] == "YES")
         ]
 
-
-        r = df[
-            (df["USERNAME"] == username_clean) &
-            (df["PASSWORD"] == password_clean) &
-            (df["APPROVED"] == "YES")
-        ]
-
-        print("LOGIN MATCH ROWS:", len(r))
-
         if r.empty:
-
-            attempts = login_attempts.get(uid, {"count": 0, "time": time.time()})
-            attempts["count"] += 1
-            attempts["time"] = time.time()
-            login_attempts[uid] = attempts
-
-            if attempts["count"] >= 5:
-                await message.reply("🚫 Too many failed attempts. Try again after 10 minutes.")
-                return
-
-            await message.reply("❌ Invalid username / password or not approved.")
+            await message.reply(
+                "❌ Invalid Login\n"
+                "━━━━━━━━━━━━━━\n"
+                "• Username or password incorrect\n"
+                "• OR account not approved by admin"
+            )
             user_state.pop(uid, None)
             return
 
