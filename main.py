@@ -49,7 +49,6 @@ def load_env_config():
     """Load and validate all environment variables"""
     config = {
         "BOT_TOKEN": os.getenv("BOT_TOKEN"),
-        "ADMIN_USERS": os.getenv("ADMIN_USERS", "prince").lower(),
         "AWS_ACCESS_KEY_ID": os.getenv("AWS_ACCESS_KEY_ID"),
         "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY"),
         "AWS_REGION": os.getenv("AWS_REGION", "ap-south-1"),
@@ -67,12 +66,6 @@ def load_env_config():
     
     if not all([config["AWS_ACCESS_KEY_ID"], config["AWS_SECRET_ACCESS_KEY"], config["AWS_BUCKET"]]):
         logger.warning("AWS credentials not fully set. Some features may not work.")
-    
-    # Parse admin users
-    admin_users = [user.strip() for user in config["ADMIN_USERS"].split(",") if user.strip()]
-    if "prince" not in admin_users:
-        admin_users.append("prince")
-    config["ADMIN_USERS_LIST"] = admin_users
     
     return config
 
@@ -184,14 +177,12 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     return None
 
 def is_admin(user: Optional[Dict[str, Any]]) -> bool:
-    """Check if user is admin"""
+    """Check if user is admin - ONLY based on Excel file, not hardcoded"""
     if not user:
         return False
     
-    username = normalize_text(user.get("USERNAME", ""))
     role = normalize_text(user.get("ROLE", ""))
-    
-    return role == "admin" or username in CONFIG["ADMIN_USERS_LIST"]
+    return role == "admin"
 
 def get_logged_user(uid: int) -> Optional[Dict[str, Any]]:
     """Get logged in user with session validation"""
@@ -1029,8 +1020,8 @@ async def handle_all_messages(message: types.Message):
             new_row = {
                 "USERNAME": username,
                 "PASSWORD": clean_password(password),
-                "ROLE": "client",
-                "APPROVED": "NO"
+                "ROLE": "client",  # Default role for new users
+                "APPROVED": "NO"   # Needs admin approval
             }
             
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -1077,7 +1068,7 @@ async def handle_all_messages(message: types.Message):
             df = load_accounts()
             
             # Debug: Show what's in the dataframe
-            logger.info(f"Accounts in database: {df[['USERNAME', 'APPROVED']].to_dict('records')}")
+            logger.info(f"Accounts in database: {df[['USERNAME', 'ROLE', 'APPROVED']].to_dict('records')}")
             
             # Clean and normalize data
             df["USERNAME"] = df["USERNAME"].apply(normalize_text)
@@ -1091,6 +1082,7 @@ async def handle_all_messages(message: types.Message):
             logger.info(f"Cleaned username: '{username_clean}'")
             logger.info(f"Cleaned password: '{password_clean}'")
             logger.info(f"Available usernames in DB: {df['USERNAME'].tolist()}")
+            logger.info(f"Available roles in DB: {df['ROLE'].tolist()}")
             
             # Find matching user
             user_row = df[
@@ -1115,19 +1107,16 @@ async def handle_all_messages(message: types.Message):
                 user_state.pop(uid, None)
                 return
             
-            # Login successful
+            # Login successful - Get role DIRECTLY from Excel
             user_data = user_row.iloc[0].to_dict()
+            role = user_data["ROLE"].lower()
             
-            # Determine role (check if user is in admin list)
-            role = user_data["ROLE"]
-            if username_clean in CONFIG["ADMIN_USERS_LIST"]:
-                role = "admin"
-                logger.info(f"User {username} granted admin role via ADMIN_USERS list")
+            logger.info(f"User {username} logged in with role: {role} (from Excel)")
             
-            # Store user session
+            # Store user session - NO forced admin role
             logged_in_users[uid] = {
                 "USERNAME": user_data["USERNAME"],
-                "ROLE": role,
+                "ROLE": role,  # Direct from Excel
                 "SUPPLIER_KEY": f"supplier_{user_data['USERNAME'].lower()}" if role == "supplier" else None,
                 "last_active": time.time()
             }
@@ -1136,14 +1125,14 @@ async def handle_all_messages(message: types.Message):
             # Log activity
             log_activity(logged_in_users[uid], "LOGIN")
             
-            # Determine keyboard
+            # Determine keyboard based on role from Excel
             if role == "admin":
                 kb = admin_kb
                 welcome_msg = f"👑 Welcome Admin {user_data['USERNAME'].capitalize()}"
             elif role == "supplier":
                 kb = supplier_kb
                 welcome_msg = f"💎 Welcome Supplier {user_data['USERNAME'].capitalize()}"
-            else:
+            else:  # client or any other role
                 kb = client_kb
                 welcome_msg = f"🥂 Welcome {user_data['USERNAME'].capitalize()}"
             
@@ -1428,7 +1417,7 @@ async def handle_logged_in_buttons(message: types.Message, user: Dict):
     """Handle button presses for logged in users"""
     text = message.text
     
-    # Admin buttons
+    # Admin buttons - ONLY if role is admin in Excel
     if user["ROLE"] == "admin":
         if text == "💎 View All Stock":
             await view_all_stock(message, user)
@@ -1449,7 +1438,7 @@ async def handle_logged_in_buttons(message: types.Message, user: Dict):
         else:
             await message.reply("Please use the menu buttons.")
     
-    # Supplier buttons
+    # Supplier buttons - ONLY if role is supplier in Excel
     elif user["ROLE"] == "supplier":
         if text == "📤 Upload Excel":
             await upload_excel_prompt(message, user)
@@ -1466,8 +1455,8 @@ async def handle_logged_in_buttons(message: types.Message, user: Dict):
         else:
             await message.reply("Please use the menu buttons.")
     
-    # Client buttons
-    elif user["ROLE"] == "client":
+    # Client buttons - Default for everyone else
+    else:
         if text == "💎 Search Diamonds":
             await search_diamonds_start(message, user)
         elif text == "🔥 Smart Deals":
@@ -2716,7 +2705,6 @@ if __name__ == "__main__":
     logger.info(f"🚀 Starting Diamond Trading Bot v1.0")
     logger.info(f"📊 Python: {CONFIG['PYTHON_VERSION']}")
     logger.info(f"🌐 Port: {CONFIG['PORT']}")
-    logger.info(f"👑 Admin Users: {CONFIG['ADMIN_USERS_LIST']}")
     
     uvicorn.run(
         app,
