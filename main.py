@@ -29,6 +29,12 @@ def clean_text(value):
     value = re.sub(r"\s+", " ", value)
     return value.strip()
 
+def clean_password(val):
+    val = clean_text(val)
+    if val.endswith(".0"):   # Excel password issue
+        val = val[:-2]
+    return val
+
 IST = pytz.timezone("Asia/Kolkata")
 
 def safe_excel(val):
@@ -69,16 +75,15 @@ AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 AWS_BUCKET = os.getenv("AWS_BUCKET")
 
-ACCOUNTS_KEY = "diamond-bucket-styleoflifes/users/accounts.xlsx"
-READ_ONLY_ACCOUNTS = True
-STOCK_KEY = "diamond-bucket-styleoflifes/stock/diamonds.xlsx"
-
-SUPPLIER_STOCK_FOLDER = "diamond-bucket-styleoflifes/stock/suppliers/"
-COMBINED_STOCK_KEY = "diamond-bucket-styleoflifes/stock/combined/all_suppliers_stock.xlsx"
-ACTIVITY_LOG_FOLDER = "diamond-bucket-styleoflifes/activity_logs/"
-DEALS_FOLDER = "diamond-bucket-styleoflifes/deals/"
-DEAL_HISTORY_KEY = "diamond-bucket-styleoflifes/deals/deal_history.xlsx"
-NOTIFICATIONS_FOLDER = "diamond-bucket-styleoflifes/notifications/"
+ACCOUNTS_KEY = "users/accounts.xlsx"
+READ_ONLY_ACCOUNTS = False
+STOCK_KEY = "stock/diamonds.xlsx"
+SUPPLIER_STOCK_FOLDER = "stock/suppliers/"
+COMBINED_STOCK_KEY = "stock/combined/all_suppliers_stock.xlsx"
+ACTIVITY_LOG_FOLDER = "activity_logs/"
+DEALS_FOLDER = "deals/"
+DEAL_HISTORY_KEY = "deals/deal_history.xlsx"
+NOTIFICATIONS_FOLDER = "notifications/"
 
 
 # ---------------- BOT INIT ----------------
@@ -620,14 +625,16 @@ async def account_flow_handler(message: types.Message):
 
     if step == "login_password":
         username = user_state[uid].get("login_username")
-        password = text.strip()
-
+        password = clean_password(text)
+        
         df = load_accounts()
 
         # ✅ Normalize dataframe
-        df["USERNAME"] = df["USERNAME"].astype(str).apply(clean_text).str.lower()
-        df["PASSWORD"] = df["PASSWORD"].astype(str).apply(clean_text)
-        df["APPROVED"] = df["APPROVED"].astype(str).apply(clean_text).str.upper()
+        df["USERNAME"] = df["USERNAME"].apply(clean_text).str.lower()
+        df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
+        df["APPROVED"] = df["APPROVED"].apply(clean_text).str.upper()
+
+        username = clean_text(username).lower()
 
         row = df[
             (df["USERNAME"] == username) &
