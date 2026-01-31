@@ -36,8 +36,8 @@ def clean_text(value):
 
 def clean_password(val):
     val = clean_text(val)
-    if val.endswith(".0"):   # Excel password issue
-        val = val[:-2]
+    # if val.endswith(".0"):   # Excel password issue
+    #    val = val[:-2]
     return val
 
 IST = pytz.timezone("Asia/Kolkata")
