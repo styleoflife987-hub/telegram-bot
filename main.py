@@ -153,8 +153,8 @@ def clean_text(value: Any) -> str:
     value = str(value)
     value = unicodedata.normalize("NFKC", value)
     value = value.replace("\u00A0", " ").replace("\u200B", "")
-    value = value.replace("\n", "").replace("\r", "")
-    value = re.sub(r"\s+", " ", value)
+    value = value.replace("\n", " ").replace("\r", " ")  # Replace newlines with spaces
+    value = re.sub(r"\s+", " ", value)  # Collapse multiple spaces
     return value.strip()
 
 def clean_password(val: Any) -> str:
@@ -1058,7 +1058,7 @@ async def handle_all_messages(message: types.Message):
         
         # Login flow
         elif state.get("step") == "login_username":
-            username = message.text.strip().lower()
+            username = message.text.strip()
             state["login_username"] = username
             state["step"] = "login_password"
             
@@ -1069,8 +1069,15 @@ async def handle_all_messages(message: types.Message):
             password = message.text.strip()
             username = state.get("login_username", "")
             
+            # Debug logging
+            logger.info(f"Login attempt - Username entered: '{username}'")
+            logger.info(f"Login attempt - Password entered: '{password}'")
+            
             # Validate login
             df = load_accounts()
+            
+            # Debug: Show what's in the dataframe
+            logger.info(f"Accounts in database: {df[['USERNAME', 'APPROVED']].to_dict('records')}")
             
             # Clean and normalize data
             df["USERNAME"] = df["USERNAME"].apply(normalize_text)
@@ -1081,6 +1088,10 @@ async def handle_all_messages(message: types.Message):
             username_clean = normalize_text(username)
             password_clean = clean_password(password)
             
+            logger.info(f"Cleaned username: '{username_clean}'")
+            logger.info(f"Cleaned password: '{password_clean}'")
+            logger.info(f"Available usernames in DB: {df['USERNAME'].tolist()}")
+            
             # Find matching user
             user_row = df[
                 (df["USERNAME"] == username_clean) &
@@ -1089,12 +1100,17 @@ async def handle_all_messages(message: types.Message):
             ]
             
             if user_row.empty:
+                logger.warning(f"Login failed for username: {username_clean}")
+                logger.warning(f"Available usernames: {df['USERNAME'].tolist()}")
+                logger.warning(f"Approved statuses: {df['APPROVED'].tolist()}")
+                
                 await message.reply(
                     "❌ Invalid login credentials\n\n"
                     "Possible reasons:\n"
                     "• Username/password incorrect\n"
                     "• Account not approved\n"
-                    "• Account doesn't exist"
+                    "• Account doesn't exist\n\n"
+                    "Please check your credentials and try again."
                 )
                 user_state.pop(uid, None)
                 return
