@@ -85,6 +85,33 @@ DEALS_FOLDER = "deals/"
 DEAL_HISTORY_KEY = "deals/deal_history.xlsx"
 NOTIFICATIONS_FOLDER = "notifications/"
 
+# ----------- S3 TEST FUNCTION -----------
+
+def test_s3_access():
+    try:
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=AWS_ACCESS_KEY,
+            aws_secret_access_key=AWS_SECRET_KEY,
+            region_name=AWS_REGION
+        )
+
+        s3.head_object(
+            Bucket=AWS_BUCKET,
+            Key=ACCOUNTS_KEY
+        )
+        print("✅ S3 READ WORKING")
+
+        s3.put_object(
+            Bucket=AWS_BUCKET,
+            Key="test/telegram_write_test.txt",
+            Body=b"telegram write ok"
+        )
+        print("✅ S3 WRITE WORKING")
+
+    except Exception as e:
+        print("❌ S3 ERROR:", e)
+
 
 # ---------------- BOT INIT ----------------
 
