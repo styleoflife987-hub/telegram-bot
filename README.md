@@ -1,14 +1,20 @@
-cat > README.md << 'EOF'
-# 💎 Diamond Bot - DigitalOcean
+# 💎 Diamond Trading Bot
 
-## Quick Start
-```bash
-# Setup
-./setup.sh
+Telegram bot for diamond trading with supplier and client management.
 
-# Configure
-cp .env.example .env
-nano .env  # Add your BOT_TOKEN
+## 🚀 Deploy to AWS
 
-# Run
-python3 diamond_bot.py
+[![Deploy to AWS](https://img.shields.io/badge/Deploy%20to-AWS-orange)](https://aws.amazon.com/)
+
+## 📦 Features
+- Supplier stock upload
+- Client diamond search
+- Deal management
+- Admin dashboard
+- Excel file handling
+
+## 🔧 Setup
+1. Get Telegram Bot Token from @BotFather
+2. Deploy to AWS
+3. Set environment variables
+4. Start using!
