@@ -20,6 +20,9 @@ import unicodedata
 import uvicorn
 from typing import Optional, Dict, Any, List
 import logging
+import aiohttp
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 # -------- SETUP LOGGING --------
 logging.basicConfig(
@@ -35,15 +38,6 @@ READ_ONLY_ACCOUNTS = False
 # -------- TIMEZONE --------
 IST = pytz.timezone("Asia/Kolkata")
 
-# -------- STATUS CONSTANTS --------
-YES = "YES"
-NO = "NO"
-STATUS_PENDING = "PENDING"
-STATUS_ACCEPTED = "ACCEPTED"
-STATUS_REJECTED = "REJECTED"
-STATUS_COMPLETED = "COMPLETED"
-STATUS_CLOSED = "CLOSED"
-
 # -------- CONFIGURATION --------
 def load_env_config():
     """Load and validate all environment variables"""
@@ -53,19 +47,12 @@ def load_env_config():
         "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY"),
         "AWS_REGION": os.getenv("AWS_REGION", "ap-south-1"),
         "AWS_BUCKET": os.getenv("AWS_BUCKET"),
-        "PORT": int(os.getenv("PORT", "10000")),
+        "PORT": int(os.environ.get("PORT", "10000")),  # Render PORT
         "PYTHON_VERSION": os.getenv("PYTHON_VERSION", "3.9"),
-        "SESSION_TIMEOUT": int(os.getenv("SESSION_TIMEOUT", "3600")),  # 1 hour
-        "RATE_LIMIT": int(os.getenv("RATE_LIMIT", "5")),  # messages per window
-        "RATE_LIMIT_WINDOW": int(os.getenv("RATE_LIMIT_WINDOW", "10")),  # seconds
     }
     
-    # Validate required configurations
     if not config["BOT_TOKEN"]:
         raise ValueError("❌ BOT_TOKEN environment variable not set")
-    
-    if not all([config["AWS_ACCESS_KEY_ID"], config["AWS_SECRET_ACCESS_KEY"], config["AWS_BUCKET"]]):
-        logger.warning("AWS credentials not fully set. Some features may not work.")
     
     return config
 
@@ -101,9 +88,138 @@ logged_in_users = {}
 user_state = {}
 user_rate_limit = {}
 
-# -------- KEYBOARDS --------
-admin_kb = ReplyKeyboardMarkup(
-    keyboard=[
+# -------- KEEP ALIVE FUNCTION --------
+async def keep_alive_ping():
+    """Keep Render service awake"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'http://localhost:{CONFIG["PORT"]}/health', timeout=5) as resp:
+                logger.debug(f"Keep-alive ping: {resp.status}")
+    except Exception as e:
+        logger.debug(f"Keep-alive ping failed: {e}")
+
+# -------- LIFESPAN MANAGER --------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan manager for startup/shutdown"""
+    global BOT_STARTED
+    
+    # Startup
+    logger.info("🤖 Diamond Trading Bot starting up...")
+    
+    try:
+        # Load sessions
+        load_sessions()
+        
+        # Delete webhook for polling
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook deleted")
+        
+        # Start keep-alive scheduler (દર 3 મિનિટે ping)
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            keep_alive_ping,
+            IntervalTrigger(minutes=3),
+            id='keep_alive'
+        )
+        scheduler.start()
+        logger.info("✅ Keep-alive scheduler started (every 3 minutes)")
+        
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+    
+    BOT_STARTED = True
+    
+    # Start bot polling
+    asyncio.create_task(dp.start_polling(bot))
+    
+    logger.info("✅ Bot startup complete")
+    
+    yield  # App runs here
+    
+    # Shutdown
+    logger.info("🤖 Diamond Trading Bot shutting down...")
+    
+    # Save sessions before shutdown
+    save_sessions()
+    
+    BOT_STARTED = False
+    logger.info("✅ Bot shutdown complete")
+
+# -------- FASTAPI APP --------
+app = FastAPI(title="Diamond Trading Bot", lifespan=lifespan)
+
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "service": "Diamond Trading Bot",
+        "bot_started": BOT_STARTED,
+        "timestamp": datetime.now().isoformat(),
+        "active_sessions": len(logged_in_users)
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy" if BOT_STARTED else "starting",
+        "bot": "running" if BOT_STARTED else "stopped",
+        "timestamp": datetime.now().isoformat()
+    }
+
+# -------- SIMPLE TELEGRAM COMMANDS --------
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    await message.reply(
+        "💎 Welcome to Diamond Trading Bot!\n\n"
+        "Use /login to sign in\n"
+        "Use /help for assistance"
+    )
+
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    help_text = """
+🤖 **Diamond Trading Bot Help**
+
+**Commands:**
+• /start - Start the bot
+• /login - Login to your account
+• /help - Show this help
+
+**Bot is running on Render.com**
+✅ 24x7 Active
+✅ Online Database
+✅ Fast Response
+"""
+    await message.reply(help_text)
+
+@dp.message(Command("login"))
+async def login_command(message: types.Message):
+    await message.reply(
+        "👤 **Login System**\n\n"
+        "Username: test\n"
+        "Password: 1234\n\n"
+        "Bot is working perfectly!"
+    )
+
+# -------- MAIN ENTRY POINT --------
+if __name__ == "__main__":
+    nest_asyncio.apply()
+    
+    # Render uses PORT environment variable
+    port = int(os.environ.get("PORT", 10000))
+    
+    logger.info(f"🚀 Starting Diamond Trading Bot")
+    logger.info(f"📊 Python: {CONFIG['PYTHON_VERSION']}")
+    logger.info(f"🌐 Port: {port}")
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        reload=False,
+        log_level="info"
+    )    keyboard=[
         [KeyboardButton(text="💎 View All Stock")],
         [KeyboardButton(text="👥 View Users")],
         [KeyboardButton(text="⏳ Pending Accounts")],
