@@ -5,8 +5,7 @@ pytz==2023.3
 openpyxl==3.1.2
 python-dotenv==1.0.0
 apscheduler==3.10.4
-
-# Optional (જો AWS/S3 જોઈએ તો):
+aiohttp==3.8.4
+nest-asyncio==1.6.0
 boto3==1.34.7
 pandas==2.1.4
-aiohttp==3.8.4  # aiogram compatible version
