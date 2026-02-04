@@ -177,10 +177,11 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     return None
 
 def is_admin(user: Optional[Dict[str, Any]]) -> bool:
-    """Check if user is admin - ONLY based on Excel file, not hardcoded"""
+    """Check if user is admin - ONLY based on Excel file"""
     if not user:
         return False
     
+    # Get role from logged_in_users which was set from Excel during login
     role = normalize_text(user.get("ROLE", ""))
     return role == "admin"
 
@@ -284,20 +285,19 @@ def load_accounts() -> pd.DataFrame:
             
             df[col] = df[col].fillna("").astype(str).apply(clean_text)
         
+        # Clean passwords (handle Excel .0 issue)
+        df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
+        
         # Log loaded accounts (without passwords for security)
         logger.info(f"Loaded {len(df)} accounts from S3")
+        logger.info(f"Account roles: {df['ROLE'].unique().tolist()}")
         
         return df
         
     except Exception as e:
         logger.error(f"Failed to load accounts: {e}")
-        # Create default dataframe with prince as admin
-        return pd.DataFrame({
-            "USERNAME": ["prince"],
-            "PASSWORD": ["1234"],
-            "ROLE": ["admin"],
-            "APPROVED": ["YES"]
-        })
+        # Return empty dataframe - no default accounts
+        return pd.DataFrame(columns=["USERNAME", "PASSWORD", "ROLE", "APPROVED"])
 
 def save_accounts(df: pd.DataFrame):
     """Save accounts to Excel file in S3"""
@@ -987,7 +987,7 @@ async def handle_all_messages(message: types.Message):
         
         # Account creation flow
         if state.get("step") == "create_username":
-            username = message.text.strip().lower()
+            username = message.text.strip()
             
             if len(username) < 3:
                 await message.reply("❌ Username must be at least 3 characters.")
@@ -995,7 +995,7 @@ async def handle_all_messages(message: types.Message):
             
             # Check if username exists
             df = load_accounts()
-            if not df[df["USERNAME"].str.lower() == username].empty:
+            if not df[df["USERNAME"].str.lower() == username.lower()].empty:
                 await message.reply("❌ Username already exists.")
                 user_state.pop(uid, None)
                 return
@@ -1037,7 +1037,7 @@ async def handle_all_messages(message: types.Message):
             )
             
             # Notify admins
-            admin_df = df[df["ROLE"] == "admin"]
+            admin_df = df[df["ROLE"].str.lower() == "admin"]
             for _, admin in admin_df.iterrows():
                 save_notification(
                     admin["USERNAME"],
@@ -1062,61 +1062,63 @@ async def handle_all_messages(message: types.Message):
             
             # Debug logging
             logger.info(f"Login attempt - Username entered: '{username}'")
-            logger.info(f"Login attempt - Password entered: '{password}'")
             
             # Validate login
             df = load_accounts()
             
-            # Debug: Show what's in the dataframe
-            logger.info(f"Accounts in database: {df[['USERNAME', 'ROLE', 'APPROVED']].to_dict('records')}")
+            if df.empty:
+                logger.error("No accounts found in database")
+                await message.reply("❌ No accounts found in system.")
+                user_state.pop(uid, None)
+                return
             
             # Clean and normalize data
-            df["USERNAME"] = df["USERNAME"].apply(normalize_text)
+            df["USERNAME"] = df["USERNAME"].apply(clean_text)
             df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
-            df["APPROVED"] = df["APPROVED"].apply(normalize_text).str.upper()
-            df["ROLE"] = df["ROLE"].apply(normalize_text)
+            df["APPROVED"] = df["APPROVED"].apply(clean_text).str.upper()
+            df["ROLE"] = df["ROLE"].apply(clean_text).str.lower()
             
-            username_clean = normalize_text(username)
+            username_clean = clean_text(username)
             password_clean = clean_password(password)
             
             logger.info(f"Cleaned username: '{username_clean}'")
-            logger.info(f"Cleaned password: '{password_clean}'")
-            logger.info(f"Available usernames in DB: {df['USERNAME'].tolist()}")
-            logger.info(f"Available roles in DB: {df['ROLE'].tolist()}")
+            logger.info(f"Accounts in DB: {df[['USERNAME', 'ROLE', 'APPROVED']].to_dict('records')}")
             
             # Find matching user
             user_row = df[
-                (df["USERNAME"] == username_clean) &
+                (df["USERNAME"].str.lower() == username_clean.lower()) &
                 (df["PASSWORD"] == password_clean) &
                 (df["APPROVED"] == "YES")
             ]
             
             if user_row.empty:
                 logger.warning(f"Login failed for username: {username_clean}")
-                logger.warning(f"Available usernames: {df['USERNAME'].tolist()}")
-                logger.warning(f"Approved statuses: {df['APPROVED'].tolist()}")
+                logger.warning(f"Matching check:")
+                logger.warning(f"- Username match: {(df['USERNAME'].str.lower() == username_clean.lower()).any()}")
+                logger.warning(f"- Password match: {(df['PASSWORD'] == password_clean).any()}")
+                logger.warning(f"- Approved check: {(df['APPROVED'] == 'YES').any()}")
                 
                 await message.reply(
                     "❌ Invalid login credentials\n\n"
                     "Possible reasons:\n"
                     "• Username/password incorrect\n"
-                    "• Account not approved\n"
+                    "• Account not approved by admin\n"
                     "• Account doesn't exist\n\n"
                     "Please check your credentials and try again."
                 )
                 user_state.pop(uid, None)
                 return
             
-            # Login successful - Get role DIRECTLY from Excel
+            # Login successful - Get role from Excel
             user_data = user_row.iloc[0].to_dict()
             role = user_data["ROLE"].lower()
             
-            logger.info(f"User {username} logged in with role: {role} (from Excel)")
+            logger.info(f"User {username_clean} logged in with role: {role} (from Excel)")
             
-            # Store user session - NO forced admin role
+            # Store user session
             logged_in_users[uid] = {
                 "USERNAME": user_data["USERNAME"],
-                "ROLE": role,  # Direct from Excel
+                "ROLE": role,
                 "SUPPLIER_KEY": f"supplier_{user_data['USERNAME'].lower()}" if role == "supplier" else None,
                 "last_active": time.time()
             }
@@ -1128,13 +1130,13 @@ async def handle_all_messages(message: types.Message):
             # Determine keyboard based on role from Excel
             if role == "admin":
                 kb = admin_kb
-                welcome_msg = f"👑 Welcome Admin {user_data['USERNAME'].capitalize()}"
+                welcome_msg = f"👑 Welcome Admin {user_data['USERNAME']}"
             elif role == "supplier":
                 kb = supplier_kb
-                welcome_msg = f"💎 Welcome Supplier {user_data['USERNAME'].capitalize()}"
+                welcome_msg = f"💎 Welcome Supplier {user_data['USERNAME']}"
             else:  # client or any other role
                 kb = client_kb
-                welcome_msg = f"🥂 Welcome {user_data['USERNAME'].capitalize()}"
+                welcome_msg = f"🥂 Welcome {user_data['USERNAME']}"
             
             await message.reply(welcome_msg, reply_markup=kb)
             
@@ -1142,7 +1144,7 @@ async def handle_all_messages(message: types.Message):
             notifications = fetch_unread_notifications(user_data["USERNAME"], role)
             if notifications:
                 note_msg = "🔔 **Unread Notifications**\n\n"
-                for note in notifications[:5]:  # Show only first 5
+                for note in notifications[:5]:
                     note_msg += f"• {note['message']}\n   🕒 {note['time']}\n\n"
                 
                 if len(notifications) > 5:
@@ -1416,9 +1418,10 @@ async def handle_deal_flow(message: types.Message, state: Dict):
 async def handle_logged_in_buttons(message: types.Message, user: Dict):
     """Handle button presses for logged in users"""
     text = message.text
+    role = user.get("ROLE", "").lower()
     
-    # Admin buttons - ONLY if role is admin in Excel
-    if user["ROLE"] == "admin":
+    # Admin buttons
+    if role == "admin":
         if text == "💎 View All Stock":
             await view_all_stock(message, user)
         elif text == "👥 View Users":
@@ -1438,8 +1441,8 @@ async def handle_logged_in_buttons(message: types.Message, user: Dict):
         else:
             await message.reply("Please use the menu buttons.")
     
-    # Supplier buttons - ONLY if role is supplier in Excel
-    elif user["ROLE"] == "supplier":
+    # Supplier buttons
+    elif role == "supplier":
         if text == "📤 Upload Excel":
             await upload_excel_prompt(message, user)
         elif text == "📦 My Stock":
@@ -2486,7 +2489,7 @@ async def handle_bulk_deal_requests(message: types.Message, user: Dict, df: pd.D
             "supplier_action": "PENDING",
             "admin_action": "PENDING",
             "final_status": "OPEN",
-            "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": datetime.now(IST).strftime("%Y-%m-d %H:%M:%S")
         }
         
         # Lock the stone
@@ -2658,7 +2661,7 @@ async def handle_supplier_deal_responses(message: types.Message, user: Dict, df:
                 
                 # Notify admins
                 admin_df = load_accounts()
-                admins = admin_df[admin_df["ROLE"] == "admin"]["USERNAME"].tolist()
+                admins = admin_df[admin_df["ROLE"].str.lower() == "admin"]["USERNAME"].tolist()
                 for admin in admins:
                     save_notification(
                         admin,
