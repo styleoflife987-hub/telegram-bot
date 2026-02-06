@@ -20,6 +20,8 @@ import uvicorn
 from typing import Optional, Dict, Any, List, Tuple
 import logging
 from fastapi.responses import JSONResponse, FileResponse
+import atexit
+import httpx
 
 # -------- SETUP LOGGING --------
 logging.basicConfig(
@@ -60,6 +62,7 @@ def load_env_config():
         "RATE_LIMIT_WINDOW": int(os.getenv("RATE_LIMIT_WINDOW", "10")),
         "WEBHOOK_URL": os.getenv("WEBHOOK_URL", ""),
         "TEST_CHAT_ID": os.getenv("TEST_CHAT_ID", ""),
+        "RENDER_EXTERNAL_URL": os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-6iil.onrender.com"),
     }
     
     # Validate required configurations
@@ -71,7 +74,7 @@ def load_env_config():
     
     # Auto-generate webhook URL if not set
     if not config["WEBHOOK_URL"]:
-        render_url = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-bot-6iil.onrender.com")
+        render_url = config["RENDER_EXTERNAL_URL"]
         config["WEBHOOK_URL"] = f"{render_url}/webhook"
         logger.info(f"Auto-generated webhook URL: {config['WEBHOOK_URL']}")
     
@@ -100,6 +103,13 @@ DEALS_FOLDER = "deals/"
 DEAL_HISTORY_KEY = "deals/deal_history.xlsx"
 NOTIFICATIONS_FOLDER = "notifications/"
 SESSION_KEY = "sessions/logged_in_users.json"
+
+# -------- STARTUP CACHE --------
+startup_cache = {
+    "accounts": None,
+    "stock": None,
+    "last_loaded": 0
+}
 
 # -------- INITIALIZE AWS CLIENTS --------
 try:
@@ -290,9 +300,16 @@ def is_rate_limited(uid: int) -> bool:
     return False
 
 # -------- DATA LOADING/SAVING --------
-def load_accounts() -> pd.DataFrame:
-    """Load accounts from Excel file in S3"""
+def load_accounts(cached=True) -> pd.DataFrame:
+    """Load accounts from Excel file in S3 with caching"""
+    global startup_cache
+    
     try:
+        # Return cached data if available and not too old (5 minutes)
+        if cached and startup_cache["accounts"] is not None and (time.time() - startup_cache["last_loaded"]) < 300:
+            logger.info("✅ Using cached accounts data")
+            return startup_cache["accounts"]
+            
         if not s3:
             return pd.DataFrame(columns=["USERNAME", "PASSWORD", "ROLE", "APPROVED"])
             
@@ -310,6 +327,10 @@ def load_accounts() -> pd.DataFrame:
         df["PASSWORD"] = df["PASSWORD"].apply(clean_password)
         
         logger.info(f"✅ Loaded {len(df)} accounts from S3")
+        
+        # Cache the data
+        startup_cache["accounts"] = df
+        startup_cache["last_loaded"] = time.time()
         
         return df
         
@@ -332,15 +353,27 @@ def save_accounts(df: pd.DataFrame):
         df.to_excel(local_path, index=False)
         s3.upload_file(local_path, CONFIG["AWS_BUCKET"], ACCOUNTS_KEY)
         logger.info(f"✅ Saved {len(df)} accounts to S3")
+        
+        # Update cache
+        startup_cache["accounts"] = df
+        startup_cache["last_loaded"] = time.time()
+        
     except Exception as e:
         logger.error(f"❌ Failed to save accounts: {e}")
     finally:
         if os.path.exists(local_path):
             os.remove(local_path)
 
-def load_stock() -> pd.DataFrame:
-    """Load combined stock from S3"""
+def load_stock(cached=True) -> pd.DataFrame:
+    """Load combined stock from S3 with caching"""
+    global startup_cache
+    
     try:
+        # Return cached data if available and not too old (5 minutes)
+        if cached and startup_cache["stock"] is not None and (time.time() - startup_cache["last_loaded"]) < 300:
+            logger.info("✅ Using cached stock data")
+            return startup_cache["stock"]
+            
         if not s3:
             return pd.DataFrame()
             
@@ -348,6 +381,11 @@ def load_stock() -> pd.DataFrame:
         s3.download_file(CONFIG["AWS_BUCKET"], COMBINED_STOCK_KEY, local_path)
         df = pd.read_excel(local_path)
         logger.info(f"✅ Loaded {len(df)} stock items from S3")
+        
+        # Cache the data
+        startup_cache["stock"] = df
+        startup_cache["last_loaded"] = time.time()
+        
         return df
     except Exception as e:
         logger.warning(f"⚠️ Failed to load stock: {e}")
@@ -731,6 +769,10 @@ def rebuild_combined_stock():
         
         logger.info(f"✅ Rebuilt combined stock with {len(final_df)} items from {len(dfs)} suppliers")
         
+        # Update cache
+        startup_cache["stock"] = final_df
+        startup_cache["last_loaded"] = time.time()
+        
         if os.path.exists(local_path):
             os.remove(local_path)
             
@@ -788,6 +830,10 @@ def atomic_lock_stone(stone_id: str) -> bool:
                 os.remove(path)
         
         logger.info(f"✅ Locked stone: {stone_id}")
+        
+        # Clear cache to force reload
+        startup_cache["stock"] = None
+        
         return True
         
     except Exception as e:
@@ -837,6 +883,9 @@ def unlock_stone(stone_id: str):
         
         logger.info(f"✅ Unlocked stone: {stone_id}")
         
+        # Clear cache to force reload
+        startup_cache["stock"] = None
+        
     except Exception as e:
         logger.error(f"❌ Failed to unlock stone {stone_id}: {e}")
 
@@ -878,6 +927,9 @@ def remove_stone_from_supplier_and_combined(stone_id: str):
                     break
         
         logger.info(f"✅ Removed stone {stone_id} from all stock files")
+        
+        # Clear cache to force reload
+        startup_cache["stock"] = None
         
     except Exception as e:
         logger.error(f"❌ Failed to remove stone {stone_id}: {e}")
@@ -959,6 +1011,19 @@ async def user_state_cleanup_loop():
         
         await asyncio.sleep(300)
 
+async def keep_alive_pinger():
+    """Ping the server periodically to keep it alive"""
+    logger.info("🚀 Starting keep-alive pinger...")
+    
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(f"{CONFIG['RENDER_EXTERNAL_URL']}/keep-alive")
+                logger.info(f"✅ Keep-alive ping: {response.status_code} at {datetime.now()}")
+        except Exception as e:
+            logger.warning(f"⚠️ Keep-alive ping failed: {e}")
+        await asyncio.sleep(300)  # Ping every 5 minutes
+
 # -------- LIFESPAN MANAGER --------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -992,6 +1057,8 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     asyncio.create_task(session_cleanup_loop())
     asyncio.create_task(user_state_cleanup_loop())
+    # Start keep-alive pinger (NEW)
+    asyncio.create_task(keep_alive_pinger())
     
     logger.info("✅ Bot startup complete")
     
@@ -1019,6 +1086,22 @@ async def lifespan(app: FastAPI):
     
     BOT_STARTED = False
     logger.info("✅ Bot shutdown complete")
+
+# -------- PRELOAD DATA --------
+def preload_data():
+    """Preload data on startup for faster response"""
+    logger.info("🔄 Preloading data on startup...")
+    try:
+        # Load accounts in background
+        load_accounts()
+        logger.info("✅ Accounts preloaded")
+        
+        # Load stock in background
+        load_stock()
+        logger.info("✅ Stock preloaded")
+        
+    except Exception as e:
+        logger.error(f"❌ Preloading failed: {e}")
 
 # -------- FASTAPI APP --------
 app = FastAPI(title="Diamond Trading Bot", lifespan=lifespan)
@@ -1061,7 +1144,8 @@ async def health_check():
         "aws": aws_status,
         "bucket_accessible": bucket_accessible,
         "active_users": len(logged_in_users),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "message": "Use /keep-alive endpoint for uptime monitoring"
     }
 
 @app.get("/ping")
@@ -1074,6 +1158,19 @@ async def ping():
         "bot_status": "running" if BOT_STARTED else "starting",
         "active_users": len(logged_in_users),
         "message": "Bot is alive and responding!"
+    }
+
+@app.get("/keep-alive")
+async def keep_alive():
+    """Endpoint for uptime monitoring services to ping"""
+    return {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "bot_status": "running" if BOT_STARTED else "starting",
+        "active_sessions": len(logged_in_users),
+        "cache_hit": startup_cache["accounts"] is not None,
+        "message": "Bot is kept alive by monitoring service",
+        "keep_alive_url": f"{CONFIG['RENDER_EXTERNAL_URL']}/health"
     }
 
 @app.get("/status")
@@ -1102,7 +1199,9 @@ async def status_check():
         "system": {
             "python_version": CONFIG.get("PYTHON_VERSION"),
             "port": CONFIG.get("PORT"),
-            "session_timeout": CONFIG.get("SESSION_TIMEOUT")
+            "session_timeout": CONFIG.get("SESSION_TIMEOUT"),
+            "cache_loaded": startup_cache["accounts"] is not None,
+            "cache_age_seconds": time.time() - startup_cache["last_loaded"] if startup_cache["last_loaded"] > 0 else 0
         }
     }
     
@@ -3277,6 +3376,32 @@ if __name__ == "__main__":
         logger.error("Please set these in your Render environment variables.")
     else:
         logger.info("✅ All required environment variables are set")
+    
+    # Preload data for faster startup
+    preload_data()
+    
+    # Register cleanup function
+    atexit.register(lambda: logger.info("👋 Bot shutting down"))
+    
+    # IMPORTANT: Setup instructions for 24/7 operation
+    logger.info("\n" + "="*80)
+    logger.info("🔄 FOR 24/7 OPERATION:")
+    logger.info("="*80)
+    logger.info("✅ INTERNAL: Keep-alive pinger started (pings every 5 minutes)")
+    logger.info("📋 EXTERNAL: Set up uptime monitoring:")
+    logger.info("   1. Go to https://uptimerobot.com/")
+    logger.info("   2. Create free account")
+    logger.info("   3. Add new monitor:")
+    logger.info("      - Monitor Type: HTTP(s)")
+    logger.info("      - Friendly Name: Diamond Trading Bot")
+    logger.info("      - URL: https://telegram-bot-6iil.onrender.com/keep-alive")
+    logger.info("      - Monitoring Interval: 5 minutes")
+    logger.info("="*80)
+    logger.info("📞 Monitoring URLs:")
+    logger.info(f"   • Health Check: {CONFIG['RENDER_EXTERNAL_URL']}/health")
+    logger.info(f"   • Keep-Alive: {CONFIG['RENDER_EXTERNAL_URL']}/keep-alive")
+    logger.info(f"   • Status: {CONFIG['RENDER_EXTERNAL_URL']}/status")
+    logger.info("="*80 + "\n")
     
     uvicorn.run(
         app,
