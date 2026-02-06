@@ -605,7 +605,8 @@ class DiamondExcelValidator:
             if 'Price Per Carat' in df.columns:
                 try:
                     df['Price Per Carat'] = pd.to_numeric(df['Price Per Carat'], errors='coerce')
-                    invalid_prices = df['Price Per Carat'].isna() | (df['Price Per Carat"] <= 0)
+                    # FIXED: Changed "Price Per Carat" to 'Price Per Carat'
+                    invalid_prices = df['Price Per Carat'].isna() | (df['Price Per Carat'] <= 0)
                     if invalid_prices.any():
                         invalid_count = invalid_prices.sum()
                         errors.append(f'Price Per Carat: {invalid_count} rows have invalid values (must be > 0)')
