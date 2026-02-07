@@ -1,0 +1,25 @@
+name: Keep Bot Alive
+
+on:
+  schedule:
+    # Run every 5 minutes for better uptime
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Bot Service
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://diamond-trading-bot-fly.fly.dev/keep-alive)
+          echo "Service pinged with status: $response at $(date)"
+          
+      - name: Check Health
+        run: |
+          curl -s https://diamond-trading-bot-fly.fly.dev/health | jq '.'
+          
+      - name: Verify Bot Status
+        run: |
+          echo "Bot status check:"
+          curl -s https://diamond-trading-bot-fly.fly.dev/status | jq '{status: .status, bot_started: .bot.started, active_sessions: .bot.active_sessions}'
