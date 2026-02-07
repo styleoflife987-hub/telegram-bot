@@ -1,7 +1,12 @@
 """
 Diamond Trading Bot - Complete Version
-Optimized for Fly.io deployment
+Optimized for Fly.io deployment with DNS fix
 """
+
+# ============= DNS FIX FOR FLY.IO =============
+import socket
+# Force IPv4 to avoid DNS issues on Fly.io
+socket.getaddrinfo = lambda *args: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (args[0], args[1]))]
 
 import asyncio
 import pandas as pd
@@ -63,7 +68,7 @@ def load_env_config():
         "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY"),
         "AWS_REGION": os.getenv("AWS_REGION", "ap-south-1"),
         "AWS_BUCKET": os.getenv("AWS_BUCKET", "diamond-bucket-styleoflifes"),
-        "PORT": int(os.getenv("PORT", "8000")),
+        "PORT": int(os.getenv("PORT", "8000")),  # FLY.IO USES 8000, NOT 10000
         "SESSION_TIMEOUT": int(os.getenv("SESSION_TIMEOUT", "3600")),
         "RATE_LIMIT": int(os.getenv("RATE_LIMIT", "5")),
         "RATE_LIMIT_WINDOW": int(os.getenv("RATE_LIMIT_WINDOW", "10")),
@@ -82,6 +87,7 @@ def load_env_config():
     logger.info(f"🌐 Webhook URL: {config['WEBHOOK_URL']}")
     logger.info(f"📦 S3 Bucket: {config['AWS_BUCKET']}")
     logger.info(f"🚀 Fly.io URL: {FLY_APP_URL}")
+    logger.info(f"🔌 Port: {config['PORT']}")
     
     return config
 
@@ -925,17 +931,30 @@ async def lifespan(app: FastAPI):
     try:
         load_sessions()
         
-        # Set webhook
+        # Set webhook with error handling
         webhook_url = CONFIG["WEBHOOK_URL"]
-        if webhook_url:
-            await bot.set_webhook(
-                url=webhook_url,
-                drop_pending_updates=True,
-                allowed_updates=dp.resolve_used_update_types()
-            )
-            logger.info(f"✅ Webhook set to: {webhook_url}")
+        if webhook_url and "fly.dev" in webhook_url:
+            try:
+                # Remove any existing webhook first
+                await bot.delete_webhook(drop_pending_updates=True)
+                
+                # Set new webhook with timeout
+                await asyncio.wait_for(
+                    bot.set_webhook(
+                        url=webhook_url,
+                        drop_pending_updates=True,
+                        allowed_updates=dp.resolve_used_update_types(),
+                        max_connections=50
+                    ),
+                    timeout=10.0
+                )
+                logger.info(f"✅ Webhook set to: {webhook_url}")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Webhook setup timed out, but bot will continue")
+            except Exception as e:
+                logger.error(f"❌ Webhook error (non-critical): {e}")
         else:
-            logger.warning("⚠️ No webhook URL set")
+            logger.warning(f"⚠️ Invalid webhook URL: {webhook_url}")
         
     except Exception as e:
         logger.error(f"❌ Startup error: {e}")
@@ -3226,4 +3245,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=CONFIG["PORT"],
         log_level="info"
-)
+    )
