@@ -2,11 +2,9 @@ services:
   - type: web
     name: diamond-trading-bot
     env: python
-    region: oregon  # or singapore, frankfurt, ohio
-    plan: free      # or starter, standard
     buildCommand: |
+      pip install --upgrade pip
       pip install -r requirements.txt
-      python -c "import nltk; nltk.download('punkt')"
     startCommand: uvicorn main:app --host=0.0.0.0 --port=$PORT
     envVars:
       - key: PYTHON_VERSION
