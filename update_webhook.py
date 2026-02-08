@@ -1,89 +1,81 @@
 import os
 import sys
 import requests
-from urllib.parse import urljoin
+from dotenv import load_dotenv
 
-def update_telegram_webhook():
+def setup_webhook_for_render():
     """
-    Update Telegram webhook URL for your bot.
-    Run this script after deploying your bot to set the webhook URL.
+    Setup webhook for Diamond Trading Bot deployed on Render
     """
+    print("="*60)
+    print("🤖 Diamond Trading Bot - Webhook Setup for Render")
+    print("="*60)
     
-    # Configuration - Set these values
+    # Try to load from .env file
+    load_dotenv()
+    
+    # Get bot token
     BOT_TOKEN = os.getenv("BOT_TOKEN")
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    
-    # If not set in environment, prompt user
     if not BOT_TOKEN:
-        print("⚠️  BOT_TOKEN not found in environment variables.")
+        print("❌ BOT_TOKEN not found in environment variables.")
         BOT_TOKEN = input("Enter your Telegram Bot Token: ").strip()
+        if not BOT_TOKEN:
+            print("❌ Bot token is required.")
+            sys.exit(1)
     
-    if not WEBHOOK_URL:
-        print("⚠️  WEBHOOK_URL not found in environment variables.")
-        base_url = input("Enter your application URL (e.g., https://your-app.herokuapp.com): ").strip()
-        WEBHOOK_URL = urljoin(base_url, "/webhook")
+    # Get Render app URL
+    RENDER_URL = os.getenv("RENDER_URL") or os.getenv("WEBHOOK_URL")
+    if not RENDER_URL:
+        print("\n🌐 Enter your Render application URL")
+        print("   Example: https://diamond-trading-bot.onrender.com")
+        RENDER_URL = input("Render URL: ").strip()
+        if not RENDER_URL.startswith("https://"):
+            RENDER_URL = f"https://{RENDER_URL}"
     
-    if not BOT_TOKEN or not WEBHOOK_URL:
-        print("❌ Both BOT_TOKEN and WEBHOOK_URL are required.")
-        sys.exit(1)
+    # Ensure it has the /webhook endpoint
+    if not RENDER_URL.endswith("/webhook"):
+        RENDER_URL = f"{RENDER_URL.rstrip('/')}/webhook"
     
     print("\n" + "="*60)
-    print("🤖 Telegram Webhook Configuration")
+    print("📋 CONFIGURATION SUMMARY")
     print("="*60)
     print(f"Bot Token: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
-    print(f"Webhook URL: {WEBHOOK_URL}")
+    print(f"Webhook URL: {RENDER_URL}")
     print("="*60 + "\n")
     
-    # First, get current webhook info
-    print("📡 Getting current webhook information...")
+    # Test if Render app is accessible
+    print("🔍 Testing Render application...")
     try:
-        info_response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo",
-            timeout=10
-        )
-        
-        if info_response.status_code == 200:
-            info_data = info_response.json()
-            if info_data.get("ok"):
-                current_url = info_data["result"].get("url", "Not set")
-                print(f"Current webhook URL: {current_url}")
-                
-                if current_url == WEBHOOK_URL:
-                    print("✅ Webhook is already set to the correct URL.")
-                    return
-            else:
-                print("ℹ️  Could not retrieve current webhook info")
+        health_check = RENDER_URL.replace("/webhook", "/health")
+        response = requests.get(health_check, timeout=10)
+        if response.status_code == 200:
+            print("✅ Render application is accessible")
         else:
-            print(f"⚠️  Failed to get webhook info: {info_response.status_code}")
+            print(f"⚠️  Render application returned status {response.status_code}")
+            print(f"   Make sure your bot is deployed and running on Render")
     except Exception as e:
-        print(f"⚠️  Error getting webhook info: {e}")
+        print(f"⚠️  Could not reach Render application: {e}")
+        print("   Make sure your bot is deployed and running")
     
-    # Delete existing webhook first
-    print("\n🗑️  Deleting any existing webhook...")
+    # Delete existing webhook
+    print("\n🗑️  Deleting existing webhook...")
     try:
         delete_response = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
             timeout=10
         )
-        
         if delete_response.status_code == 200:
-            delete_data = delete_response.json()
-            if delete_data.get("ok"):
-                print("✅ Existing webhook deleted successfully")
-            else:
-                print(f"⚠️  Failed to delete webhook: {delete_data.get('description')}")
-        else:
-            print(f"⚠️  Failed to delete webhook: {delete_response.status_code}")
+            print("✅ Existing webhook deleted")
     except Exception as e:
         print(f"⚠️  Error deleting webhook: {e}")
     
     # Set new webhook
-    print(f"\n📡 Setting new webhook to: {WEBHOOK_URL}")
+    print(f"\n📡 Setting webhook to Render...")
     try:
         webhook_data = {
-            "url": WEBHOOK_URL,
+            "url": RENDER_URL,
             "max_connections": 50,
-            "allowed_updates": ["message", "callback_query", "chat_member", "my_chat_member"],
+            "allowed_updates": ["message", "callback_query"],
             "drop_pending_updates": True
         }
         
@@ -93,35 +85,35 @@ def update_telegram_webhook():
             timeout=30
         )
         
-        print(f"Status Code: {response.status_code}")
-        
         if response.status_code == 200:
             result = response.json()
-            print(f"Response: {result}")
-            
             if result.get("ok"):
                 print("\n" + "="*60)
-                print("✅ WEBHOOK SET SUCCESSFULLY!")
+                print("✅ WEBHOOK SETUP SUCCESSFUL!")
                 print("="*60)
-                print(f"Your bot is now configured to receive updates at:")
-                print(f"{WEBHOOK_URL}")
-                print("\nYour bot is ready to use! 🚀")
+                print(f"Your bot is now connected to Render at:")
+                print(f"{RENDER_URL}")
+                print("\n🎉 Your Diamond Trading Bot is ready to use!")
+                print("\n📋 NEXT STEPS:")
+                print("1. Open Telegram and search for your bot")
+                print("2. Start a chat with /start command")
+                print("3. Create an account with /createaccount")
+                print("4. Test all features")
             else:
                 print(f"\n❌ Failed to set webhook: {result.get('description')}")
         else:
-            print(f"\n❌ HTTP Error: {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"\n❌ HTTP Error {response.status_code}")
             
     except requests.exceptions.Timeout:
         print("❌ Request timed out. Please try again.")
     except requests.exceptions.ConnectionError:
-        print("❌ Connection error. Please check your internet connection.")
+        print("❌ Connection error. Please check your internet.")
     except Exception as e:
         print(f"❌ Unexpected error: {type(e).__name__}: {e}")
 
-def test_bot(token):
-    """Test if bot is responding"""
-    print("\n🧪 Testing bot connection...")
+def check_bot_status(token):
+    """Check if bot is working"""
+    print("\n🔧 Checking bot status...")
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{token}/getMe",
@@ -131,69 +123,74 @@ def test_bot(token):
         if response.status_code == 200:
             data = response.json()
             if data.get("ok"):
-                bot_info = data["result"]
-                print(f"✅ Bot connected successfully!")
-                print(f"   Bot ID: {bot_info['id']}")
-                print(f"   Bot Name: {bot_info['first_name']}")
-                print(f"   Username: @{bot_info.get('username', 'N/A')}")
+                bot = data["result"]
+                print(f"✅ Bot is working:")
+                print(f"   Name: {bot['first_name']}")
+                print(f"   Username: @{bot.get('username', 'N/A')}")
+                print(f"   ID: {bot['id']}")
                 return True
-            else:
-                print(f"❌ Invalid bot token: {data.get('description')}")
-        else:
-            print(f"❌ Failed to connect to bot: {response.status_code}")
     except Exception as e:
-        print(f"❌ Error testing bot: {e}")
+        print(f"❌ Error checking bot: {e}")
     
     return False
 
-def get_deployment_instructions():
-    """Show deployment instructions"""
-    print("\n" + "="*60)
-    print("📋 DEPLOYMENT INSTRUCTIONS")
-    print("="*60)
-    print("\n1. Deploy your bot to a hosting platform:")
-    print("   • Heroku: heroku create your-app-name")
-    print("   • Render: https://render.com")
-    print("   • Railway: https://railway.app")
-    print("   • VPS: Any server with Python 3.11+")
+def get_webhook_info(token):
+    """Get current webhook information"""
+    print("\n📡 Getting current webhook info...")
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/getWebhookInfo",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("ok"):
+                info = data["result"]
+                print(f"Current webhook URL: {info.get('url', 'Not set')}")
+                print(f"Pending updates: {info.get('pending_update_count', 0)}")
+                if info.get('last_error_date'):
+                    print(f"Last error: {info.get('last_error_message')}")
+                return info
+    except Exception as e:
+        print(f"❌ Error getting webhook info: {e}")
     
-    print("\n2. Set environment variables:")
-    print("   • BOT_TOKEN: Your Telegram bot token")
-    print("   • AWS_ACCESS_KEY_ID: AWS Access Key")
-    print("   • AWS_SECRET_ACCESS_KEY: AWS Secret Key")
-    print("   • AWS_BUCKET: Your S3 bucket name")
-    print("   • WEBHOOK_URL: Your app URL + /webhook")
-    
-    print("\n3. Deploy your code")
-    print("\n4. Run this script to set the webhook:")
-    print("   python update_webhook.py")
-    print("="*60)
+    return None
 
 if __name__ == "__main__":
-    print("🤖 Diamond Trading Bot - Webhook Setup")
+    print("🚀 Diamond Trading Bot Setup")
     print("="*60)
     
-    # Show deployment instructions
-    get_deployment_instructions()
+    # Check if running in Render-like environment
+    is_render = os.getenv("RENDER", False)
+    if is_render:
+        print("🌐 Detected Render environment")
+        print("Webhook setup will be automatic after deployment")
+        sys.exit(0)
     
-    # Ask user if they want to proceed
-    proceed = input("\nDo you want to set up the webhook now? (y/n): ").strip().lower()
+    # Manual setup
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    if not BOT_TOKEN:
+        BOT_TOKEN = input("Enter your Telegram Bot Token: ").strip()
     
-    if proceed == 'y':
-        # Test bot token first
-        BOT_TOKEN = os.getenv("BOT_TOKEN")
-        if not BOT_TOKEN:
-            BOT_TOKEN = input("Enter your Telegram Bot Token: ").strip()
+    if not BOT_TOKEN:
+        print("❌ Bot token is required.")
+        sys.exit(1)
+    
+    # Check bot status
+    if check_bot_status(BOT_TOKEN):
+        # Show current webhook info
+        get_webhook_info(BOT_TOKEN)
         
-        if test_bot(BOT_TOKEN):
+        # Ask user if they want to setup webhook
+        print("\n" + "="*60)
+        choice = input("Do you want to setup webhook for Render? (y/n): ").strip().lower()
+        
+        if choice == 'y':
             os.environ["BOT_TOKEN"] = BOT_TOKEN
-            update_telegram_webhook()
+            setup_webhook_for_render()
         else:
-            print("\n❌ Please check your bot token and try again.")
+            print("\nℹ️  Webhook setup skipped.")
+            print("You can run this script later when you're ready.")
     else:
-        print("\nℹ️  You can run this script later with:")
-        print("   python update_webhook.py")
-        print("\nOr set environment variables and run:")
-        print("   export BOT_TOKEN=your_token")
-        print("   export WEBHOOK_URL=https://your-app.com/webhook")
-        print("   python update_webhook.py")
+        print("\n❌ Invalid bot token. Please check and try again.")
