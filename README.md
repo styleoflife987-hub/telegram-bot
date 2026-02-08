@@ -51,8 +51,8 @@ After deployment is complete:
 2. Run the webhook setup script:
 ```bash
 # Set environment variables
-export BOT_TOKEN=your_bot_token
-export RENDER_URL=https://your-app.onrender.com
+export BOT_TOKEN=7965048668:AAHFhqx-u5lVJk4Z5yuBOyBOzVwGQqD3ZK0
+export RENDER_URL=https://telegram-bot-6iil.onrender.com
 
 # Run webhook setup
 python update_webhook.py
