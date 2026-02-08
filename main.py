@@ -1,6 +1,6 @@
 """
 Diamond Trading Bot - Complete Version
-Optimized for Fly.io deployment
+Generic deployment ready (Fly.io removed)
 """
 
 import asyncio
@@ -26,11 +26,6 @@ import logging
 from fastapi.responses import JSONResponse, FileResponse
 import atexit
 import httpx
-import ssl
-
-# ============= FLY.IO CONFIGURATION =============
-FLY_APP_NAME = os.getenv("FLY_APP_NAME", "diamond-trading-bot-fly")
-FLY_APP_URL = f"https://{FLY_APP_NAME}.fly.dev"
 
 # ============= SETUP LOGGING =============
 logging.basicConfig(
@@ -38,7 +33,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('/tmp/bot.log')  # Log to file for Fly.io
+        logging.FileHandler('bot.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -67,14 +62,15 @@ def load_env_config():
         "AWS_ACCESS_KEY_ID": os.getenv("AWS_ACCESS_KEY_ID"),
         "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY"),
         "AWS_REGION": os.getenv("AWS_REGION", "ap-south-1"),
-        "AWS_BUCKET": os.getenv("AWS_BUCKET", "diamond-bucket-styleoflifes"),
+        "AWS_BUCKET": os.getenv("AWS_BUCKET"),
         "PORT": int(os.getenv("PORT", "8000")),
         "SESSION_TIMEOUT": int(os.getenv("SESSION_TIMEOUT", "3600")),
         "RATE_LIMIT": int(os.getenv("RATE_LIMIT", "5")),
         "RATE_LIMIT_WINDOW": int(os.getenv("RATE_LIMIT_WINDOW", "10")),
-        "WEBHOOK_URL": os.getenv("WEBHOOK_URL", f"{FLY_APP_URL}/webhook"),
+        "WEBHOOK_URL": os.getenv("WEBHOOK_URL", ""),
         "TEST_CHAT_ID": os.getenv("TEST_CHAT_ID", ""),
         "ENVIRONMENT": os.getenv("ENVIRONMENT", "production"),
+        "BASE_URL": os.getenv("BASE_URL", ""),
     }
     
     # Validate required configurations
@@ -85,9 +81,8 @@ def load_env_config():
         logger.warning("AWS credentials not fully set. Some features may not work.")
     
     logger.info(f"✅ Config loaded: BOT_TOKEN present: {bool(config['BOT_TOKEN'])}")
-    logger.info(f"🌐 Webhook URL: {config['WEBHOOK_URL']}")
+    logger.info(f"🌐 Webhook URL: {config['WEBHOOK_URL'] or 'Not set'}")
     logger.info(f"📦 S3 Bucket: {config['AWS_BUCKET']}")
-    logger.info(f"🚀 Fly.io URL: {FLY_APP_URL}")
     logger.info(f"🔌 Port: {config['PORT']}")
     logger.info(f"🌍 Environment: {config['ENVIRONMENT']}")
     
@@ -447,7 +442,7 @@ def save_notification(username: str, role: str, message: str):
         
         data.append({
             "message": message,
-            "time": datetime.now(IST).strftime("%Y-%m-d %H:%M"),
+            "time": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
             "read": False
         })
         
@@ -908,48 +903,6 @@ async def user_state_cleanup_loop():
         
         await asyncio.sleep(300)
 
-async def keep_alive_pinger():
-    """Ping the server periodically"""
-    while True:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                try:
-                    response = await client.get(f"{FLY_APP_URL}/keep-alive")
-                    logger.info(f"✅ Keep-alive ping: {response.status_code}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Keep-alive ping failed: {e}")
-        except Exception as e:
-            logger.warning(f"⚠️ Keep-alive client error: {e}")
-        await asyncio.sleep(300)
-
-async def webhook_maintainer():
-    """Periodically check and fix webhook"""
-    while True:
-        try:
-            if CONFIG.get("ENVIRONMENT") == "production" and BOT_STARTED:
-                webhook_info = await bot.get_webhook_info()
-                current_url = webhook_info.url
-                expected_url = CONFIG["WEBHOOK_URL"]
-                
-                if current_url != expected_url:
-                    logger.warning(f"⚠️ Webhook mismatch. Current: {current_url[:50]}..., Expected: {expected_url}")
-                    try:
-                        await bot.delete_webhook(drop_pending_updates=False)
-                        await asyncio.sleep(1)
-                        await bot.set_webhook(
-                            url=expected_url,
-                            drop_pending_updates=True,
-                            allowed_updates=dp.resolve_used_update_types(),
-                            max_connections=50
-                        )
-                        logger.info("✅ Webhook reestablished")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to fix webhook: {e}")
-        except Exception as e:
-            logger.error(f"❌ Webhook maintainer error: {e}")
-        
-        await asyncio.sleep(3600)  # Check every hour
-
 # ============= LIFESPAN MANAGER =============
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -963,9 +916,9 @@ async def lifespan(app: FastAPI):
         load_sessions()
         preload_data()
         
-        # Set webhook with error handling
+        # Set webhook if WEBHOOK_URL is provided
         webhook_url = CONFIG["WEBHOOK_URL"]
-        if webhook_url and "fly.dev" in webhook_url:
+        if webhook_url:
             try:
                 # Remove any existing webhook first
                 await bot.delete_webhook(drop_pending_updates=True)
@@ -987,7 +940,7 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"❌ Webhook setup error: {e}")
         else:
-            logger.warning(f"⚠️ Invalid or missing webhook URL: {webhook_url}")
+            logger.warning("⚠️ WEBHOOK_URL not set, using polling mode")
         
     except Exception as e:
         logger.error(f"❌ Startup error: {e}")
@@ -997,8 +950,6 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     asyncio.create_task(session_cleanup_loop())
     asyncio.create_task(user_state_cleanup_loop())
-    asyncio.create_task(keep_alive_pinger())
-    asyncio.create_task(webhook_maintainer())
     
     logger.info("✅ Bot startup complete")
     
@@ -1049,12 +1000,10 @@ async def root():
         "service": "Diamond Trading Bot",
         "version": "1.0",
         "bot_started": BOT_STARTED,
-        "webhook_url": CONFIG["WEBHOOK_URL"],
         "timestamp": datetime.now().isoformat(),
         "active_sessions": len(logged_in_users),
         "aws_connected": s3 is not None,
-        "bucket": CONFIG["AWS_BUCKET"],
-        "fly_app_url": FLY_APP_URL
+        "bucket": CONFIG["AWS_BUCKET"]
     }
 
 @app.get("/health")
@@ -1102,8 +1051,7 @@ async def keep_alive():
         "timestamp": datetime.now().isoformat(),
         "bot_status": "running" if BOT_STARTED else "starting",
         "active_sessions": len(logged_in_users),
-        "cache_hit": startup_cache["accounts"] is not None,
-        "fly_app": FLY_APP_NAME
+        "cache_hit": startup_cache["accounts"] is not None
     }
 
 @app.get("/status")
@@ -1127,11 +1075,6 @@ async def status_check():
             "bucket": CONFIG.get("AWS_BUCKET"),
             "region": CONFIG.get("AWS_REGION"),
             "bucket_accessible": None
-        },
-        
-        "fly": {
-            "app_name": FLY_APP_NAME,
-            "app_url": FLY_APP_URL
         },
         
         "system": {
@@ -3242,10 +3185,9 @@ if __name__ == "__main__":
     logger.info(f"🚀 Starting Diamond Trading Bot v1.0")
     logger.info(f"📊 Python: 3.11.0")
     logger.info(f"🌐 Port: {CONFIG['PORT']}")
-    logger.info(f"🔗 Webhook URL: {CONFIG['WEBHOOK_URL']}")
+    logger.info(f"🔗 Webhook URL: {CONFIG['WEBHOOK_URL'] or 'Not set (polling mode)'}")
     logger.info(f"🤖 Bot Token: {'Set' if CONFIG['BOT_TOKEN'] else 'Not Set'}")
     logger.info(f"📦 S3 Bucket: {CONFIG['AWS_BUCKET']}")
-    logger.info(f"🚀 Fly.io URL: {FLY_APP_URL}")
     
     required_vars = ["BOT_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BUCKET"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -3254,20 +3196,6 @@ if __name__ == "__main__":
         logger.error(f"❌ Missing required environment variables: {missing_vars}")
     else:
         logger.info("✅ All required environment variables are set")
-    
-    logger.info("\n" + "="*80)
-    logger.info("🚀 FLY.IO DEPLOYMENT READY")
-    logger.info("="*80)
-    logger.info(f"📱 Your bot URL: {FLY_APP_URL}")
-    logger.info(f"🔗 Health Check: {FLY_APP_URL}/health")
-    logger.info(f"🔗 Keep-Alive: {FLY_APP_URL}/keep-alive")
-    logger.info(f"🔗 Status: {FLY_APP_URL}/status")
-    logger.info("="*80)
-    logger.info("📋 To set up uptime monitoring:")
-    logger.info("1. Go to https://uptimerobot.com")
-    logger.info(f"2. Monitor URL: {FLY_APP_URL}/keep-alive")
-    logger.info("3. Interval: 5 minutes")
-    logger.info("="*80 + "\n")
     
     atexit.register(lambda: logger.info("👋 Bot shutting down"))
     
